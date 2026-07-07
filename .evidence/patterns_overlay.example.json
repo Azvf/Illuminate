@@ -1,0 +1,21 @@
+{
+  "abstraction_keywords": [
+    "Dispatcher",
+    "Coordinator",
+    "ServiceLocator",
+    "Resolver",
+    "Aggregator",
+    "Mediator",
+    "Facade",
+    "Broker"
+  ],
+  "definition_keywords": [],
+  "feature_flag_patterns": [
+    "\\bRELEASE_",
+    "\\bDEBUG_"
+  ],
+  "fallback_patterns": {
+    "catch_keywords": ["rescue"],
+    "null_coalesce_chain": null
+  }
+}

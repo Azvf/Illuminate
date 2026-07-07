@@ -1,0 +1,7 @@
+# Evidence Layer output (regenerated on each audit)
+/evidence.json
+.evidence/evidence.json
+
+# Python
+__pycache__/
+*.pyc
