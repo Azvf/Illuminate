@@ -142,6 +142,37 @@ LegacyAdapter → CompatibilityWrapper → NewApiBridge → LegacyConverter
 
 每次改动都应该让代码库比改动前更简洁。
 
+#### 注释与结构（Refactor Before Comment）
+
+遇到需要注释才能理解的代码段时，默认行为不是"添加解释性注释"，而是"定位复杂度来源并降低结构复杂度"。
+
+先回答：
+
+- 能否通过命名表达意图？
+- 能否提取函数让职责单一化？
+- 能否通过结构调整消除歧义？
+
+只有当复杂度源自外部约束（协议、硬件、历史决策）而非结构问题时，才用注释记录原因。
+
+注释应解释 why / 约束 / trade-off / 外部要求，不应复述代码已表达的实现细节。
+
+❌ 注释补偿职责爆炸：
+
+```cpp
+// Handle different states depending on player status...
+void HandleState(State state) { ... }
+```
+
+✅ 拆分为职责单一的函数：
+
+```cpp
+void HandleAlivePlayer() { ... }
+void HandleDeadPlayer() { ... }
+void HandleRespawningPlayer() { ... }
+```
+
+> 完整注释决策树与 Comment Smells 分类见 `docs/Guidelines/code-clarity.md`。
+
 #### 完成标准
 
 设计完成当且仅当：
@@ -164,6 +195,18 @@ LLM 的推理顺序天然倾向于：先形成印象 → 给出判断 → 再验
 正确的顺序是：先收集证据 → 完成分析 → 最后形成结论。
 
 数字和程度判断只能源于分析结果，不能源于直觉预测。
+
+#### 反证优先（Counter Evidence First）
+
+形成结论前，主动寻找能推翻结论的证据，而非仅收集支撑证据。
+
+支撑证据容易找到——实现作者总能为自己的代码找到通过的理由。反证才能区分"碰巧没暴露"和"确实没问题"。
+
+适用于：
+- 结构审查（Step 4 Adversarial Review）：假设实现有 bug，尝试找到它
+- 行为验证（`behavior-verification` skill）：推导缺失用例，而非确认已有测试通过
+
+结论成立当且仅当反证未能推翻它，而非支撑证据充分。
 
 #### 证据阶梯
 
@@ -347,14 +390,26 @@ Symptom（症状）≠ Trigger（触发器）≠ Root Cause（根因），三者
 
 2. Analyze（分析）
    └─ 收集证据，检查日志/代码/数据，形成有依据的结论
+   └─ 行为变更任务：实现前从需求推导行为契约
+      （expected_behavior / failure_condition / regression_case）
+      验证标准来自需求而非实现，避免测试与代码共享同一误解
+   └─ 纯重构 / 文档 / 配置任务不强制行为契约
 
 3. Implement（实现）
    └─ 遵循奥卡姆工程原则，最小化必要复杂度
 
-4. Self Review（自审）
-   └─ 以 Senior Engineer 身份审视方案，删除不必要复杂度
+4. Adversarial Review（对抗式自审）
+   └─ 假设实现有 bug，主动寻找能推翻实现的证据
+   └─ 不是"检查是否正确"，而是"尝试证明它错了"
+   └─ 同时审视结构复杂度，删除不必要抽象
 
-5. Audit（审计）
+5. Evidence（证据收集）
+   └─ 运行 python .evidence/audit.py，获取确定性事实报告
+   └─ Evidence Report 提供层 1 事实，Agent 不再自审复杂度
+   └─ 行为变更任务：触发 `behavior-verification` skill 推导行为风险与缺失用例
+
+6. Audit（审计）
+   └─ 基于结构事实（Evidence Report）+ 行为风险（behavior-verification 产出）做层 3 判断
    └─ 附带复杂性审计，记录最终结果
 ```
 
@@ -364,10 +419,14 @@ Symptom（症状）≠ Trigger（触发器）≠ Root Cause（根因），三者
 
 审计内容：
 
-- 新增抽象（Factory / Adapter / Wrapper / Registry）：[数量，逐个列出]
-- 新增 fallback 路径：[数量]
-- 新增 feature flag：[数量]
-- 删除的代码：[行数]
+- 新增抽象（Factory / Adapter / Wrapper / Registry）：[数量，逐个列出] — Evidence Report 提供
+- 新增 fallback 路径：[数量] — Evidence Report 提供
+- 新增 feature flag：[数量] — Evidence Report 提供
+- 删除的代码：[行数] — Evidence Report 提供
+- 新增注释中复述代码实现语义的（非解释 why / 约束 / trade-off）：[数量] — LLM 判断（层 3，无法脚本化）
+
+前四项由 `python .evidence/audit.py` 输出的 Evidence Report 提供，Agent 直接引用事实。
+第五项是语义判断（层 3），由 Agent 基于代码内容判断，但必须引用 Evidence Report 中的其他事实作为上下文。
 
 如果新增抽象 > 0，必须逐个说明为什么不能删除或简化。无法说明的，删掉。
 
@@ -385,6 +444,36 @@ Symptom（症状）≠ Trigger（触发器）≠ Root Cause（根因），三者
 
 ---
 
+## Evidence Layer
+
+Evidence Layer 是 Illuminate 的 Verification Layer —— 用确定性工具测量代码变更，替代 LLM 自审复杂度。
+
+### 三层模型
+
+| 层级 | 职责 | 执行者 |
+|------|------|--------|
+| Layer 1 | 确定性事实 | Evidence Providers（脚本） |
+| Layer 2 | 半确定性结构信号 | Evidence Providers 检测 + LLM 判定 |
+| Layer 3 | 语义判断 | LLM（基于 Layer 1+2 证据） |
+
+Evidence Providers 覆盖 Layer 1 和 Layer 2。Layer 3 仍由 LLM 负责，但必须引用 Evidence Report 中的事实作为依据。
+
+### 设计原则
+
+- **Evidence 而非 Score**：输出只包含事实，不包含分数或风险评估。避免 Goodhart's law。
+- **确定性**：同一输入始终产生同一输出，不依赖 LLM 判断。
+- **零依赖**：仅使用 Python 标准库 + git。
+
+### 运行
+
+```bash
+python .evidence/audit.py --pretty --repo .
+```
+
+详见 `.evidence/README.md`。
+
+---
+
 ## Skills
 
 以下能力按需加载，根据任务类型触发：
@@ -399,6 +488,7 @@ Symptom（症状）≠ Trigger（触发器）≠ Root Cause（根因），三者
 | 设计压力测试 | `grilling` | 方案需要系统性追问 |
 | 代码精简诊断 | `simplify-code` | 冗余传递链、多 fallback、双轨并行 |
 | 改动前影响评估 | `impact-analysis` | 评估改动波及范围、识别回归风险 |
+| 行为正确性验证 | `behavior-verification` | 新功能、行为修改、bugfix 的回归风险 |
 
 ### Skill 结构
 
@@ -406,15 +496,12 @@ Symptom（症状）≠ Trigger（触发器）≠ Root Cause（根因），三者
 
 ### Skill 组合关系
 
-skill 之间通过 hand-off 协作，关系如下：
+skill 之间通过 hand-off 协作，关系在每个 skill 自身定义，**不在本文件重复维护**，避免表格与 skill 文件不同步：
 
-| 当前 Skill | 完成后切回 / 可转至 | 条件 |
-|-----------|-------------------|------|
-| `backtrack-root-cause` | `layer-debug` / `perf-profile` / 领域 skill | root cause 定位后，按排障类型切回 |
-| `layer-debug` | `backtrack-root-cause` | 反复打补丁陷入死循环时 |
-| `perf-profile` | `backtrack-root-cause` | 反复打补丁陷入死循环时 |
-| `perf-profile` | 领域实现 skill | root cause 已定、需直接改代码修复时 |
-| `impact-analysis` | 领域实现 skill | 影响评估完成、进入实现阶段时 |
+- 具体可转入的 skill：见各 skill frontmatter 的 `recommended_next`（如 `backtrack-root-cause` → `[layer-debug, perf-profile]`）
+- 切回领域 skill 的泛化规则与触发条件：见各 skill 的「边界」段落
+
+修改 hand-off 关系时，只改对应 skill 文件，不要回过头来同步本文件。
 
 ---
 
@@ -433,4 +520,4 @@ skill 之间通过 hand-off 协作，关系如下：
 - 如果改动改变了后续默认做法，同步更新对应 guideline、skill 或索引文档。
 - `docs/Development/Active` 中的主题完成后，默认只迁移到 `docs/Development/Archived`；只有用户明确要求时，才能再迁移到 `docs/Framework`。
 - 日志输出必须使用仓库当前的日志框架，禁止使用 `Console.WriteLine`、`print`、`Log.d` 等临时调试输出作为正式日志。
-- CI 流水线中应增加静态检查：新增 Factory / Adapter / Wrapper / Fallback 时要求人工确认（待 CI 配置后启用）。
+- Evidence Layer（`python .evidence/audit.py`）提供确定性事实。Mandatory Workflow 步骤 5 必须运行。CI 集成待配置后启用。
