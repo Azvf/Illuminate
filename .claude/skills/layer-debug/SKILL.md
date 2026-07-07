@@ -1,6 +1,7 @@
 ---
 name: layer-debug
 description: Debug functional issues by writing executable test scripts against real data. Use when 排查功能链路缺陷（数据不完整、解析错误、依赖丢失、索引缺失）；以运行时日志为核心依据对齐现象与链路阶段，再以真实数据编写可执行测试脚本做交叉验证，避免仅靠静态代码阅读下结论。
+recommended_next: [backtrack-root-cause]
 ---
 
 # Layer Debug
@@ -9,7 +10,7 @@ description: Debug functional issues by writing executable test scripts against 
 
 **以日志为核心依据**：先收集并与问题对齐的运行时日志（阶段、路径、关键字段与异常等），必要时提高日志粒度后再读；在此基础上写可执行测试脚本直接调用底层接口，用真实数据跑出可与日志逐项对照的结果。静态阅读代码只用于提出假设，不得在未与日志、脚本结论对齐的情况下认定为 root cause。
 
-## 适用场景
+## 触发条件
 
 - 数据遗漏、字段缺失、结果不完整
 - 解析错误、格式不匹配、编码问题
@@ -17,7 +18,7 @@ description: Debug functional issues by writing executable test scripts against 
 - 调用链路断裂（某一环节未执行、执行顺序错误）
 - 修复后需要用日志对照 + 可执行脚本做端到端确认
 
-## 核心原则：日志为据，脚本互证
+## 核心规则
 
 **排障必须以运行时日志为核心依据**（时间序、阶段、关键字段须与现象对齐）。在能取得真实数据的前提下，须再产出可执行的测试脚本（或等价的可查数据断言），使结论可与日志逐项对照。
 
@@ -30,7 +31,7 @@ description: Debug functional issues by writing executable test scripts against 
 3. 脚本必须输出 PASS/FAIL 判定和关键数值，不输出模糊描述
 4. 脚本退出码必须反映测试结果：0 = 全部通过，非 0 = 有失败
 
-## 默认排障顺序
+## 工作流
 
 ### 阶段 1：复现问题
 
@@ -92,7 +93,7 @@ scripts/test/<issue-name>/
 - **不修改被测代码来适配测试**：测试脚本应对当前代码做黑盒验证，不能为了测试而改访问级别或加测试专用出口
 - **临时目录隔离**：每个测试用例使用独立的临时目录，结束后清理，避免状态泄漏
 
-## 每次至少确认
+## 完成前确认
 
 - 是否与当前问题对齐了足够的运行时日志（阶段、字段、序列）
 - 测试脚本是否使用真实数据（不是合成数据）
@@ -109,3 +110,9 @@ scripts/test/<issue-name>/
 - 分层断裂定位报告（哪一层失败、失败的具体数据）
 - 修复代码（如需要）
 - 修复后测试脚本的重新运行结果
+
+## 边界
+
+- 不负责性能链路排查（启动慢、加载慢、滚动卡顿）——那属于 `perf-profile` 的职责
+- 不负责 root cause 分析的流程框架——那属于 `backtrack-root-cause` 的职责；若反复打补丁陷入死循环，切到 `backtrack-root-cause`
+- 本 skill 聚焦功能链路的分层验证与可执行脚本排障，完成后切回对应实现类 skill

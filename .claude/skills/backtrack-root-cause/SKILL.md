@@ -1,13 +1,14 @@
 ---
 name: backtrack-root-cause
 description: When AI repeatedly makes patch-style fixes without proper root cause analysis — user calls for a full reset. Use when the user signals you are patching in circles, going down dead ends, or fixing symptoms rather than root cause.
+recommended_next: [layer-debug, perf-profile]
 ---
 
 # Backtrack Root Cause
 
 当排障或开发陷入"反复打补丁 — 无效 — 再打补丁"的死循环时，用此 skill 强制回到 root cause 分析起点，完整重梳理后再决定修复。
 
-## 触发短语
+## 触发条件
 
 用户发出以下信号之一时，立即激活：
 
@@ -17,7 +18,7 @@ description: When AI repeatedly makes patch-style fixes without proper root caus
 - "回到根因分析"
 - "你一直在死胡同里绕"
 
-## 核心原则
+## 核心规则
 
 - **补丁叠加不等于修复**：一个正确修复替换 N 个补丁。
 - **Symptom ≠ Trigger ≠ Root Cause**：三者必须分开写清，不得混为一谈。
@@ -27,7 +28,7 @@ description: When AI repeatedly makes patch-style fixes without proper root caus
 
 - `docs/Guidelines/工程约定.md`
 
-## 流程
+## 工作流
 
 ### Phase 0：立即停手
 
@@ -92,7 +93,7 @@ Root Cause 必须满足：
 - 最后跑全量（如适用）
 - 修复不通过 → 回到 Phase 3，不得回到 Phase 6 继续改代码
 
-## 完成前至少确认
+## 完成前确认
 
 - 是否已完整写出 Phase 1 回溯记录（所有已尝试的失败修复）
 - 是否已用可观测事实重新描述原始现象（不含推断）
@@ -101,6 +102,13 @@ Root Cause 必须满足：
 - Root Cause 是否可证伪、解释全部失败、不是现象的换个说法
 - 修复是否 1:1 对应 Root Cause
 - 修复后是否不再依赖运气、顺序、延迟或放宽断言
+
+## 默认产出
+
+- Phase 1 回溯记录表
+- 调用链梳理图（含验证状态标注）
+- 三段式 Root Cause 声明（Symptom / Trigger / Root Cause）
+- 修复设计（含行为对比和验证方法）
 
 ## 边界
 

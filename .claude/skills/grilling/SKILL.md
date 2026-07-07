@@ -3,8 +3,73 @@ name: grilling
 description: Interview the user relentlessly about a plan or design. Use when the user wants to stress-test a plan before building, or uses any 'grill' trigger phrases.
 ---
 
-Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+# Grilling
 
-Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
+用这个 skill 对方案或设计做系统性追问，直到形成共享理解。
 
-If a question can be answered by exploring the codebase, explore the codebase instead.
+## 触发条件
+
+用户想要在动手实现前压测方案，或发出以下信号之一时激活：
+
+- "grill me"
+- "压力测试这个方案"
+- "帮我追问这个设计"
+- "这个方案有什么问题"
+- "stress-test this plan"
+
+## 核心规则
+
+- **一次一个问题**：每次只问一个问题，等用户回答后再继续下一个。同时抛多个问题会让用户困惑。
+- **先探索再提问**：如果问题能通过探索代码库回答，直接探索代码库，不要问用户。
+- **每个问题附推荐答案**：对每个问题，提供你推荐的默认答案，用户可以接受或反驳。
+- **沿着决策树走**：按设计树的分支逐个解决决策依赖，不走捷径跳过中间环节。
+
+## 工作流
+
+### 1. 盘点决策树
+
+先识别方案中的所有决策点，画出依赖关系：
+
+```
+决策A → 依赖 → 决策B → 依赖 → 决策C
+```
+
+### 2. 逐个追问
+
+按依赖顺序，从根决策开始：
+
+1. 提出当前决策点的问题
+2. 附上你推荐的默认答案
+3. 等用户回答
+4. 用户回答后，标记该决策已解决，移到下一个
+
+### 3. 探索替代
+
+对每个决策，如果代码库中有已有实现或约束，先探索代码库确认，再问用户。
+
+### 4. 形成共识
+
+所有决策点解决后，汇总：
+
+- 已解决的决策列表
+- 每个决策的最终选择
+- 遗留的未解决项（如有）
+
+## 完成前确认
+
+- 是否已覆盖方案的所有关键决策点
+- 每个决策是否都有用户的明确回答或代码库证据
+- 是否有被跳过的中间依赖
+- 最终共识是否清晰可执行
+
+## 默认产出
+
+- 决策树图（含已解决/未解决标记）
+- 每个决策点的最终选择
+- 遗留未解决项清单（如有）
+
+## 边界
+
+- 不负责实现代码——本 skill 聚焦方案追问，完成后切回对应实现类 skill
+- 不负责代码精简诊断——那是 `simplify-code` 的职责
+- 不负责文档整理——那是 `tidy-doc` 的职责

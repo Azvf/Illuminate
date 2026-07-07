@@ -1,12 +1,20 @@
 ---
 name: perf-profile
 description: Profile long-running chains (startup, page load, list scroll, network requests), locate hotspot and root cause with a profiling-first workflow. Use when the task is to做性能分析、确认冷/热场景、用 profile 工具生成报告、缩小热点、区分 symptom / hotspot / root cause。
+recommended_next: [backtrack-root-cause]
 ---
 
 # Perf Profile
 
 用这个 skill 做性能链路的排查：先固定场景、先拿证据、再缩热点、最后定根因。
-不负责常规功能开发，也不负责文档维护。
+
+## 触发条件
+
+- 启动慢、冷启动/热启动场景
+- 页面加载慢、白屏时间长
+- 列表滚动卡顿、帧率掉帧
+- 网络请求链路耗时异常
+- 需要用 profile 工具生成报告、缩小热点、区分 symptom / hotspot / root cause
 
 ## 默认先读
 
@@ -20,7 +28,7 @@ description: Profile long-running chains (startup, page load, list scroll, netwo
 4. **证据闭环**：没有 profile / 日志 / 报告支撑的 root cause 判断视为未完成
 5. **场景隔离**：同一优化若同时影响多个场景（首开、搜索、列表滚动），必须拆场景分析，不用一个总感觉覆盖全部
 
-## 默认工作顺序
+## 工作流
 
 1. **固定场景**：明确冷/热、首次/重复、具体操作链路
 2. **锁定证据**：找到本次复现对应的日志、profile 文件
@@ -53,7 +61,7 @@ description: Profile long-running chains (startup, page load, list scroll, netwo
 
 补日志的目标：让下一轮报告能回答"哪段慢、输入规模多大、何时开始/结束、前台还是后台"。
 
-## 每次至少整理
+## 完成前确认
 
 - 复现场景（冷/热、首次/重复）
 - 使用的日志/profile 文件
@@ -73,5 +81,7 @@ description: Profile long-running chains (startup, page load, list scroll, netwo
 
 ## 边界
 
-- 不负责常规功能开发；那属于对应开发类 skill
+- 不负责常规功能开发——那属于对应实现类 skill
+- 不负责功能链路分层排障——那属于 `layer-debug` 的职责
+- 不负责 root cause 分析的流程框架——那属于 `backtrack-root-cause` 的职责；若反复打补丁陷入死循环，切到 `backtrack-root-cause`
 - 如果任务核心已变成"根据已确认 root cause 直接改代码修复"，切回对应实现类 skill

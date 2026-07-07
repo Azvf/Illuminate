@@ -14,7 +14,7 @@ description: Systematically clean up, align, and simplify repository documentati
 - 让 skill / guideline / framework / 索引之间的引用闭环
 - 清掉会误导后续开发的旧路径、旧术语、旧规则
 
-## 适用任务
+## 触发条件
 
 以下类型的请求应触发本 skill：
 
@@ -138,7 +138,7 @@ description: Systematically clean up, align, and simplify repository documentati
 
 只改已经会误导开发的残留；纯历史背景可保留，但必须避免被误读成现行规范。
 
-## 默认检查清单
+## 完成前确认
 
 每次文档整理至少检查：
 
@@ -150,7 +150,7 @@ description: Systematically clean up, align, and simplify repository documentati
 - 是否把"当前规则"与"历史背景"混在一起
 - 是否在精简后仍保留可执行的最小规则
 
-## 输出要求
+## 默认产出
 
 完成一次整理后，输出应尽量说明：
 

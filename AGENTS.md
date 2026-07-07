@@ -398,6 +398,23 @@ Symptom（症状）≠ Trigger（触发器）≠ Root Cause（根因），三者
 | 文档整理 | `tidy-doc` | 整理 AGENTS.md、skills、guidelines |
 | 设计压力测试 | `grilling` | 方案需要系统性追问 |
 | 代码精简诊断 | `simplify-code` | 冗余传递链、多 fallback、双轨并行 |
+| 改动前影响评估 | `impact-analysis` | 评估改动波及范围、识别回归风险 |
+
+### Skill 结构
+
+每个 skill 遵循统一结构：触发条件 → 默认先读（如适用）→ 核心规则 → 工作流 → 完成前确认 → 默认产出 → 边界。
+
+### Skill 组合关系
+
+skill 之间通过 hand-off 协作，关系如下：
+
+| 当前 Skill | 完成后切回 / 可转至 | 条件 |
+|-----------|-------------------|------|
+| `backtrack-root-cause` | `layer-debug` / `perf-profile` / 领域 skill | root cause 定位后，按排障类型切回 |
+| `layer-debug` | `backtrack-root-cause` | 反复打补丁陷入死循环时 |
+| `perf-profile` | `backtrack-root-cause` | 反复打补丁陷入死循环时 |
+| `perf-profile` | 领域实现 skill | root cause 已定、需直接改代码修复时 |
+| `impact-analysis` | 领域实现 skill | 影响评估完成、进入实现阶段时 |
 
 ---
 
