@@ -25,3 +25,40 @@ jobs:
 
       - name: Run tests
         run: python -m unittest discover tests -v
+
+      - name: Materialization smoke test
+        run: |
+          TMPDIR=$(mktemp -d)
+          illuminate mount create --pack packs/core --repo "$TMPDIR"
+          echo "PASS: Materialization completed without error"
+
+      - name: Materialization skill filter smoke test
+        run: |
+          TMPDIR=$(mktemp -d)
+          illuminate mount create \
+            --pack packs/core \
+            --repo "$TMPDIR" \
+            --skill illuminate.layer-debug \
+            --skill illuminate.grilling
+          SESSION_DIR=$(ls -d ~/.illuminate/sessions/*/ | head -1)
+          test -f "$SESSION_DIR/.claude/skills/layer-debug/SKILL.md" && echo "PASS: layer-debug mounted"
+          test ! -f "$SESSION_DIR/.claude/skills/perf-profile/SKILL.md" && echo "PASS: perf-profile excluded"
+          echo "Skill filter smoke test passed"
+
+      - name: Compat generate smoke test
+        run: |
+          illuminate compat generate --pack packs/core
+          test -d ".claude/skills" && echo "PASS: .claude/skills/ created"
+          test -f ".claude/skills/layer-debug/SKILL.md" && echo "PASS: skills copied"
+
+      - name: Compat check
+        run: |
+          illuminate compat check --pack packs/core && echo "PASS: compat check passed"
+
+      - name: Mount verify smoke test
+        run: |
+          TMPDIR=$(mktemp -d)
+          SESSION_OUTPUT=$(illuminate mount create --pack packs/core --repo "$TMPDIR" 2>&1)
+          echo "$SESSION_OUTPUT"
+          SESSION_DIR=$(echo "$SESSION_OUTPUT" | grep -oP 'Dir:\s+\K\S+')
+          illuminate mount verify "$SESSION_DIR" && echo "PASS: mount verify passed"
