@@ -89,7 +89,7 @@ class TestResolve(unittest.TestCase):
                 CORE_PACK, "/test/repo",
                 skill_filter=["illuminate.layer-debug", "illuminate.perf-profile"],
             )
-        self.assertIn("conflicts with", str(ctx.exception))
+        self.assertIn("not recommended with", str(ctx.exception))
 
     def test_alias_resolved_in_filter(self):
         # grill-me is an alias for grilling

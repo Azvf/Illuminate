@@ -112,15 +112,18 @@ class TestMaterializeClaude(unittest.TestCase):
         self.assertTrue(lock["pack_lock_hash"].startswith("sha256:"))
         self.assertGreater(len(lock["files"]), 0)
 
-    def test_lock_contains_effective_permissions(self):
-        """Lock file should record what permissions were enforced."""
+    def test_lock_contains_declared_permissions(self):
+        """Lock file should record declared and enforced permissions separately."""
         info = materialize_session(CORE_PACK, str(self.tmpdir))
-        self.assertIn("effective_permissions", info["lock"])
-        ep = info["lock"]["effective_permissions"]
-        self.assertIn("exposed_skills", ep)
-        self.assertIn("read", ep)
-        self.assertIn("write", ep)
-        self.assertIn("execute", ep)
+        lock = info["lock"]
+        self.assertIn("declared_permissions", lock)
+        self.assertIn("enforced_permissions", lock)
+        self.assertIn("enforcement_status", lock)
+        self.assertIn("exposed_skills", lock)
+        dp = lock["declared_permissions"]
+        self.assertIn("read", dp)
+        self.assertIn("write", dp)
+        self.assertIn("execute", dp)
 
     def test_lock_verifiable(self):
         info = materialize_session(CORE_PACK, str(self.tmpdir))
