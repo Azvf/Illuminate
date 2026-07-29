@@ -19,7 +19,9 @@ class TestResolve(unittest.TestCase):
     def test_create_mount_plan(self):
         plan = create_mount_plan(CORE_PACK, "/test/repo", "claude-code")
         self.assertEqual(plan["schema_version"], 1)
-        self.assertEqual(plan["repo"], "/test/repo")
+        # repo is now a dict with resolved path
+        self.assertIn("path", plan["repo"])
+        self.assertIsInstance(plan["repo"]["path"], str)
         self.assertEqual(plan["harness"], "claude-code")
         self.assertEqual(len(plan["packs"]), 1)
         self.assertEqual(plan["packs"][0]["id"], "illuminate.core")
@@ -55,6 +57,66 @@ class TestResolve(unittest.TestCase):
         dests = [f["dest"] for f in files]
         has_policy = any("policies/" in d for d in dests)
         self.assertTrue(has_policy, "File list should include policy files")
+
+    def test_skill_filter_excludes_unselected_skills(self):
+        plan = create_mount_plan(
+            CORE_PACK, "/test/repo",
+            skill_filter=["illuminate.layer-debug"],
+        )
+        exposed = plan["skills"]["exposed"]
+        self.assertEqual(exposed, ["illuminate.layer-debug"])
+
+        # resolve_file_list should only include layer-debug
+        files = resolve_file_list(CORE_PACK, plan)
+        skill_dests = [f["dest"] for f in files if ".claude/skills/" in f["dest"]]
+        for d in skill_dests:
+            self.assertTrue(
+                d.startswith(".claude/skills/layer-debug/"),
+                f"Unexpected skill file in filtered mount: {d}",
+            )
+
+    def test_unknown_skill_id_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_mount_plan(
+                CORE_PACK, "/test/repo",
+                skill_filter=["illuminate.nonexistent"],
+            )
+        self.assertIn("Unknown skill ID", str(ctx.exception))
+
+    def test_conflicting_skills_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_mount_plan(
+                CORE_PACK, "/test/repo",
+                skill_filter=["illuminate.layer-debug", "illuminate.perf-profile"],
+            )
+        self.assertIn("conflicts with", str(ctx.exception))
+
+    def test_alias_resolved_in_filter(self):
+        # grill-me is an alias for grilling
+        plan = create_mount_plan(
+            CORE_PACK, "/test/repo",
+            skill_filter=["illuminate.grill-me"],
+        )
+        exposed = plan["skills"]["exposed"]
+        self.assertIn("illuminate.grilling", exposed)
+        self.assertNotIn("illuminate.grill-me", exposed)
+
+    def test_reference_paths_no_duplicate_directory(self):
+        plan = create_mount_plan(CORE_PACK, "/test/repo")
+        files = resolve_file_list(CORE_PACK, plan)
+        ref_dests = [f["dest"] for f in files if "references/" in f["dest"]]
+        for d in ref_dests:
+            # Should not have references/references/… double nesting
+            self.assertFalse(d.startswith("references/references/"),
+                             f"Duplicate references/ directory: {d}")
+
+    def test_evidence_paths_no_duplicate_directory(self):
+        plan = create_mount_plan(CORE_PACK, "/test/repo")
+        files = resolve_file_list(CORE_PACK, plan)
+        ev_dests = [f["dest"] for f in files if "evidence/" in f["dest"]]
+        for d in ev_dests:
+            self.assertFalse(d.startswith("evidence/evidence/"),
+                             f"Duplicate evidence/ directory: {d}")
 
 
 if __name__ == "__main__":
