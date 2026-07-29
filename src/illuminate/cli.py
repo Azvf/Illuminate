@@ -13,6 +13,9 @@ Commands:
     illuminate sync codex --repo <path> [--pack <dir>] [--skill <id>...]
     illuminate sync check --repo <path> [--pack <dir>]
     illuminate sync clean --repo <path>
+    illuminate knowledge pull --repo <path> [--store <dir>]
+    illuminate knowledge status --repo <path> [--store <dir>]
+    illuminate knowledge push --repo <path> [--store <dir>] [--force]
 """
 
 import argparse
@@ -29,6 +32,7 @@ from .evidence.audit import run_audit
 from .lockfile import load_lock, verify_lock
 from .compat import compat_generate, compat_check
 from .sync_codex import sync_codex, check_sync, clean_sync
+from .knowledge_store import knowledge_pull, knowledge_status, knowledge_push
 
 
 _SESSION_BASE = Path.home() / ".illuminate" / "sessions"
@@ -120,6 +124,23 @@ def _build_parser():
 
     scl = ps.add_parser("clean", help="Remove all Illuminate-synced artifacts from a repository")
     scl.add_argument("--repo", required=True, help="Target repository path")
+
+    # knowledge pull / status / push
+    p = sub.add_parser("knowledge", help="Knowledge store operations")
+    ps = p.add_subparsers(dest="knowledge_command")
+
+    kp = ps.add_parser("pull", help="Pull project knowledge docs to central store")
+    kp.add_argument("--repo", required=True, help="Target repository path")
+    kp.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
+
+    ks = ps.add_parser("status", help="Compare project knowledge docs with central store")
+    ks.add_argument("--repo", required=True, help="Target repository path")
+    ks.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
+
+    kpush = ps.add_parser("push", help="Push store documents back to project (recovery)")
+    kpush.add_argument("--repo", required=True, help="Target repository path")
+    kpush.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
+    kpush.add_argument("--force", action="store_true", help="Override conflicts")
 
     return parser
 
@@ -434,6 +455,94 @@ def _cmd_sync_clean(args):
     return 0
 
 
+def _cmd_knowledge_pull(args):
+    repo = Path(args.repo).resolve()
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+    store = Path(args.store) if args.store else None
+
+    try:
+        result = knowledge_pull(repo, store=store)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Knowledge pull: COMPLETE", file=sys.stderr)
+    print(f"  Project:  {result['project_id']}", file=sys.stderr)
+    print(f"  Total:    {result['total']} files in docs/Knowledge/", file=sys.stderr)
+    print(f"  New:      {len(result['new'])}", file=sys.stderr)
+    print(f"  Modified: {len(result['modified'])}", file=sys.stderr)
+    print(f"  Deleted:  {len(result['deleted'])}", file=sys.stderr)
+    print(f"  Conflicts:{len(result['conflicted'])}", file=sys.stderr)
+    print(f"  Pulled:   {len(result['pulled'])}", file=sys.stderr)
+    print(f"  Synced commit: {result['last_synced_commit'][:12]}...", file=sys.stderr)
+    return 0
+
+
+def _cmd_knowledge_status(args):
+    repo = Path(args.repo).resolve()
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+    store = Path(args.store) if args.store else None
+
+    try:
+        result = knowledge_status(repo, store=store)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Knowledge status for {result['project_name']}", file=sys.stderr)
+    print(f"  Project: {result['project_id']}", file=sys.stderr)
+    print(f"  Last sync: {result['last_synced_at'] or 'never'}", file=sys.stderr)
+    print(f"  Commit:    {result['last_synced_commit'][:12] if result['last_synced_commit'] else 'unknown'}", file=sys.stderr)
+    print(f"  Synced:  {len(result['synced'])}", file=sys.stderr)
+    print(f"  New:     {len(result['new'])}", file=sys.stderr)
+    if result['new']:
+        for p in result['new']:
+            print(f"    + {p}", file=sys.stderr)
+    print(f"  Modified: {len(result['modified'])}", file=sys.stderr)
+    if result['modified']:
+        for p in result['modified']:
+            print(f"    ~ {p}", file=sys.stderr)
+    print(f"  Deleted: {len(result['deleted'])}", file=sys.stderr)
+    if result['deleted']:
+        for p in result['deleted']:
+            print(f"    - {p}", file=sys.stderr)
+    if result['conflicted']:
+        print(f"  Conflicts: {len(result['conflicted'])}", file=sys.stderr)
+        for p in result['conflicted']:
+            print(f"    ! {p}", file=sys.stderr)
+    return 0
+
+
+def _cmd_knowledge_push(args):
+    repo = Path(args.repo).resolve()
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+    store = Path(args.store) if args.store else None
+
+    try:
+        result = knowledge_push(repo, store=store, force=args.force)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if "error" in result:
+        print(f"Push: FAILED - {result['error']}", file=sys.stderr)
+        if "conflicted" in result:
+            for p in result["conflicted"]:
+                print(f"  ! {p}", file=sys.stderr)
+        return 1
+
+    print(f"Knowledge push: COMPLETE", file=sys.stderr)
+    print(f"  Project:   {result['project_id']}", file=sys.stderr)
+    print(f"  Restored:  {result['total_pushed']} files", file=sys.stderr)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Main dispatch
 # ---------------------------------------------------------------------------
@@ -451,6 +560,9 @@ _DISPATCH = {
     ("sync", "codex"): _cmd_sync_codex,
     ("sync", "check"): _cmd_sync_check,
     ("sync", "clean"): _cmd_sync_clean,
+    ("knowledge", "pull"): _cmd_knowledge_pull,
+    ("knowledge", "status"): _cmd_knowledge_status,
+    ("knowledge", "push"): _cmd_knowledge_push,
 }
 
 
