@@ -3,13 +3,16 @@
 Commands:
     illuminate pack validate <pack_dir>
     illuminate repo inspect --repo <path>
-    illuminate mount create --pack <dir> --repo <path> [--harness claude-code|codex]
+    illuminate mount create --pack <dir> --repo <path> [--harness claude-code]
     illuminate mount verify <session-dir>
     illuminate mount remove <session-dir-or-id>
-    illuminate run --pack <dir> --repo <path> [--harness claude-code|codex] [--skill <id>...] [--dry-run]
+    illuminate run --pack <dir> --repo <path> [--harness claude-code] [--skill <id>...] [--dry-run]
     illuminate evidence audit --repo <path> [--pretty] [--output <path>]
     illuminate compat generate [--pack <dir>]
     illuminate compat check [--pack <dir>]
+    illuminate sync codex --repo <path> [--pack <dir>] [--skill <id>...]
+    illuminate sync check --repo <path> [--pack <dir>]
+    illuminate sync clean --repo <path>
 """
 
 import argparse
@@ -22,10 +25,10 @@ from . import __version__
 from .validate import validate_pack
 from .inspect_repo import inspect_repo, print_inspect_report
 from .materialize_claude import materialize_session, launch_session
-from .materialize_codex import materialize_codex_session, launch_codex_session
 from .evidence.audit import run_audit
 from .lockfile import load_lock, verify_lock
 from .compat import compat_generate, compat_check
+from .sync_codex import sync_codex, check_sync, clean_sync
 
 
 _SESSION_BASE = Path.home() / ".illuminate" / "sessions"
@@ -100,6 +103,23 @@ def _build_parser():
     cg.add_argument("--pack", default="packs/core", help="Pack directory path")
     cc = ps.add_parser("check", help="Check legacy compatibility dirs exist and are in sync")
     cc.add_argument("--pack", default="packs/core", help="Pack directory path")
+
+    # sync codex / check / clean
+    p = sub.add_parser("sync", help="Synchronize Pack into target repository")
+    ps = p.add_subparsers(dest="sync_command")
+
+    sc = ps.add_parser("codex", help="Synchronize for Codex App (AGENTS.md + .agents/skills + openai.yaml)")
+    sc.add_argument("--pack", default="packs/core", help="Pack directory path")
+    sc.add_argument("--repo", required=True, help="Target repository path")
+    sc.add_argument("--skill", action="append", default=None,
+                    help="Skill ID to sync (repeatable; default: all non-alias)")
+
+    sch = ps.add_parser("check", help="Verify Codex sync integrity")
+    sch.add_argument("--pack", default="packs/core", help="Pack directory path")
+    sch.add_argument("--repo", required=True, help="Target repository path")
+
+    scl = ps.add_parser("clean", help="Remove all Illuminate-synced artifacts from a repository")
+    scl.add_argument("--repo", required=True, help="Target repository path")
 
     return parser
 
@@ -349,6 +369,71 @@ def _cmd_compat_check(args):
     return 1
 
 
+def _cmd_sync_codex(args):
+    pack_dir = Path(args.pack).resolve()
+    repo = Path(args.repo).resolve()
+
+    if not pack_dir.exists():
+        print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
+        return 1
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+
+    try:
+        result = sync_codex(pack_dir, repo, skill_filter=args.skill)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Codex sync: COMPLETE", file=sys.stderr)
+    print(f"  Pack:     {result['pack_id']} v{result['pack_version']}", file=sys.stderr)
+    print(f"  Skills:   {result['skill_count']} ({', '.join(result['exposed_skills'])})", file=sys.stderr)
+    print(f"  Files:    {result['files_copied']} copied", file=sys.stderr)
+    print(f"  AGENTS:   {'modified' if result['agents_modified'] else 'no change'}", file=sys.stderr)
+    if result.get("stale_skills_removed"):
+        print(f"  Stale:    removed {', '.join(result['stale_skills_removed'])}", file=sys.stderr)
+    return 0
+
+
+def _cmd_sync_check(args):
+    pack_dir = Path(args.pack).resolve()
+    repo = Path(args.repo).resolve()
+
+    if not pack_dir.exists():
+        print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
+        return 1
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+
+    ok, issues = check_sync(pack_dir, repo)
+    if ok:
+        print("Sync check: PASSED", file=sys.stderr)
+        return 0
+    print("Sync check: FAILED", file=sys.stderr)
+    for issue in issues:
+        print(f"  - {issue}", file=sys.stderr)
+    return 1
+
+
+def _cmd_sync_clean(args):
+    repo = Path(args.repo).resolve()
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+
+    result = clean_sync(repo)
+    removed = result.get("removed_artifacts", [])
+    if removed:
+        print("Clean: COMPLETE", file=sys.stderr)
+        for item in removed:
+            print(f"  Removed: {item}", file=sys.stderr)
+    else:
+        print("Clean: nothing to remove", file=sys.stderr)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Main dispatch
 # ---------------------------------------------------------------------------
@@ -363,6 +448,9 @@ _DISPATCH = {
     ("evidence", "audit"): _cmd_evidence_audit,
     ("compat", "generate"): _cmd_compat_generate,
     ("compat", "check"): _cmd_compat_check,
+    ("sync", "codex"): _cmd_sync_codex,
+    ("sync", "check"): _cmd_sync_check,
+    ("sync", "clean"): _cmd_sync_clean,
 }
 
 
