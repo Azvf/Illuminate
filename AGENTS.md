@@ -171,7 +171,7 @@ void HandleDeadPlayer() { ... }
 void HandleRespawningPlayer() { ... }
 ```
 
-> 完整注释决策树与 Comment Smells 分类见 `docs/Guidelines/code-clarity.md`。
+> 完整注释决策树与 Comment Smells 分类见 `packs/core/references/code-clarity.md`。
 
 #### 完成标准
 
@@ -404,7 +404,7 @@ Symptom（症状）≠ Trigger（触发器）≠ Root Cause（根因），三者
    └─ 同时审视结构复杂度，删除不必要抽象
 
 5. Evidence（证据收集）
-   └─ 运行 python .evidence/audit.py，获取确定性事实报告
+   └─ 运行 illuminate evidence audit，获取确定性事实报告
    └─ Evidence Report 提供层 1 事实，Agent 不再自审复杂度
    └─ 行为变更任务：触发 `behavior-verification` skill 推导行为风险与缺失用例
 
@@ -425,7 +425,7 @@ Symptom（症状）≠ Trigger（触发器）≠ Root Cause（根因），三者
 - 删除的代码：[行数] — Evidence Report 提供
 - 新增注释中复述代码实现语义的（非解释 why / 约束 / trade-off）：[数量] — LLM 判断（层 3，无法脚本化）
 
-前四项由 `python .evidence/audit.py` 输出的 Evidence Report 提供，Agent 直接引用事实。
+前四项由 `illuminate evidence audit` 输出的 Evidence Report 提供，Agent 直接引用事实。
 第五项是语义判断（层 3），由 Agent 基于代码内容判断，但必须引用 Evidence Report 中的其他事实作为上下文。
 
 如果新增抽象 > 0，必须逐个说明为什么不能删除或简化。无法说明的，删掉。
@@ -467,14 +467,16 @@ Evidence Providers 覆盖 Layer 1 和 Layer 2。Layer 3 仍由 LLM 负责，但�
 ### 运行
 
 ```bash
-python .evidence/audit.py --pretty --repo .
+illuminate evidence audit --pretty --repo .
 ```
 
-详见 `.evidence/README.md`。
+详见 `packs/core/references/evidence-layer.md`。
 
 ---
 
 ## Skills
+
+Skill 源文件位于 `packs/core/skills/`，每个 skill 包含 `SKILL.md`（模型读取）和 `contract.json`（机器可读契约）。物化器将 skill 复制到 session 挂载目录的 `.claude/skills/` 下供 Claude Code 自动发现。
 
 以下能力按需加载，根据任务类型触发：
 
@@ -513,11 +515,11 @@ skill 之间通过 hand-off 协作，关系在每个 skill 自身定义，**不�
 
 ## Rules
 
-- 先用对应 skill 判断命中的 `docs/Guidelines`、`docs/Framework` 相关文档，再编码、评审或结案。
-- 文档分级：`docs/Framework`（稳定事实与共享语义的 SSOT）、`docs/Guidelines`（默认做法、门禁和接入步骤）、`docs/Research`（SDK/API 逆向记录、平台行为对齐）、`docs/Issues`（平台适配问题、偶现失败记录）、`docs/Development`（推进中的主题）。不在 Framework 和 Guidelines 两边重复维护同一套语义。
+- 先用对应 skill 判断命中的 `packs/core/references/` 相关文档，再编码、评审或结案。
+- 知识边界：`policies/`（始终生效的原则）、`skills/`（按任务激活的程序性流程）、`references/`（按需读取的知识）、`evidence/`（确定性执行工具配置）。不在 policies 和 references 两边重复维护同一套语义。
 - 如果代码现实与 guideline 不一致，先指出不一致，再更新 guideline 或代码；不要继续沿用过期说法。
 - 修改文件时避免一次性大批量 `edit`；优先按单文件或少量相关文件分批提交补丁。
-- 如果改动改变了后续默认做法，同步更新对应 guideline、skill 或索引文档。
-- `docs/Development/Active` 中的主题完成后，默认只迁移到 `docs/Development/Archived`；只有用户明确要求时，才能再迁移到 `docs/Framework`。
+- 如果改动改变了后续默认做法，同步更新对应 policy、skill 或 reference 文档。
 - 日志输出必须使用仓库当前的日志框架，禁止使用 `Console.WriteLine`、`print`、`Log.d` 等临时调试输出作为正式日志。
-- Evidence Layer（`python .evidence/audit.py`）提供确定性事实。Mandatory Workflow 步骤 5 必须运行。CI 集成待配置后启用。
+- Evidence Layer（`illuminate evidence audit`）提供确定性事实。Mandatory Workflow 步骤 5 必须运行。CI 集成见 `.github/workflows/validate-pack.yml`。
+- 目标项目的文档布局由项目上下文发现协议处理（见各 skill 的 `project_context` 契约），Illuminate 不绑定具体项目布局。

@@ -1,7 +1,19 @@
-# Evidence Layer output (regenerated on each audit)
-/evidence.json
-.evidence/evidence.json
-
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Illuminate generated
+.illuminate/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
