@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "illuminate-harness"
+version = "0.1.0"
+description = "Git-versioned Harness Knowledge Pack + executable mount CLI for Claude Code"
+requires-python = ">=3.8"
+dependencies = []
+
+[project.scripts]
+illuminate = "illuminate.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"illuminate.evidence" = ["*.json"]
