@@ -20,7 +20,7 @@ A versioned collection of engineering policies, skills, references, and evidence
 - `packs/core/` — The core knowledge pack (policies, skills, references, evidence config)
 - `src/illuminate/` — CLI implementation (validate, resolve, materialize, evidence)
 - `schemas/` — JSON Schemas for pack/contract/mount-plan/mount-lock
-- `tests/` — 24 unit tests
+- `tests/` — Unit tests
 - `evals/routing/` — Routing evaluation cases
 
 ## Four Knowledge Boundaries
@@ -38,9 +38,24 @@ A versioned collection of engineering policies, skills, references, and evidence
 |---------|-------------|
 | `illuminate pack validate <dir>` | Validate a pack directory |
 | `illuminate repo inspect --repo <path>` | Inspect a target repository |
-| `illuminate mount create --pack <dir> --repo <path>` | Create a session mount |
-| `illuminate run --pack <dir> --repo <path>` | Materialize + print launch command |
+| `illuminate mount create --pack <dir> --repo <path>` | Create a session mount (materialize only) |
+| `illuminate mount verify <session-dir>` | Verify session mount integrity (hash + file checks) |
+| `illuminate run --pack <dir> --repo <path> [--skill <id>...]` | Materialize and launch Claude Code |
+| `illuminate run --pack <dir> --repo <path> --dry-run` | Materialize and print launch command without executing |
 | `illuminate evidence audit --repo <path>` | Run evidence audit |
+| `illuminate compat generate [--pack <dir>]` | Generate legacy compatibility dirs from canonical sources |
+| `illuminate compat check [--pack <dir>]` | Check compatibility dirs match canonical sources (files + SHA-256) |
+
+### Skill Selection
+
+Use `--skill` (repeatable) to mount only specific skills:
+
+```bash
+illuminate run --pack packs/core --repo /path/to/project --skill illuminate.layer-debug
+illuminate run --pack packs/core --repo /path/to/project --skill illuminate.layer-debug --skill illuminate.grilling
+```
+
+When `--skill` is omitted, all non-alias skills are exposed. Aliases are resolved to their targets.
 
 ## Session Mount
 
@@ -48,13 +63,19 @@ A versioned collection of engineering policies, skills, references, and evidence
 
 ```
 CLAUDE.md              # Compiled from policies
-.claude/skills/        # Copied skill files
-claude-settings.json   # Permission rules
-mount-plan.json        # What was resolved
-mount-lock.json        # File hashes + pack lock hash
+.claude/skills/        # Skill files (only exposed skills)
+claude-settings.json   # Permission rules (only from exposed skills)
+mount-plan.json        # What was resolved (with git identity)
+mount-lock.json        # File hashes + pack lock hash + permissions scope
 ```
 
-The session is immutable — Pack updates only affect new sessions.
+The session is immutable — Pack updates only affect new sessions. Run `illuminate mount verify <session-dir>` to check integrity.
+
+## Permission Model
+
+- Contract `permissions.execute` is compiled into `claude-settings.json` allow rules.
+- Contract `permissions.read` and `permissions.write` are declared in the lock but **not** enforced by Claude Code.
+- Only permissions from selected (`--skill`) skills contribute to the session.
 
 ## Evidence Layer
 
@@ -68,3 +89,12 @@ Reports include tool/pack/baseline metadata for traceability. Config layers:
 1. Built-in defaults
 2. Pack `patterns_config.json`
 3. Project `.illuminate/evidence/patterns_overlay.json`
+
+## Compatibility
+
+To generate legacy `.claude/skills/` (for tools that expect this layout):
+
+```bash
+illuminate compat generate --pack packs/core
+illuminate compat check --pack packs/core
+```
