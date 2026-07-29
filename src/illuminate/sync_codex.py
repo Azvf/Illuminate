@@ -184,29 +184,6 @@ def _sync_skills(
     return copied
 
 
-def _generate_openai_yaml(pack_dir: Path, manifest: dict, exposed: Set[str]) -> None:
-    """Generate agents/openai.yaml metadata for each exposed skill.
-
-    Written directly into the skill directory in .agents/skills/<name>/.
-    """
-    contracts = load_skill_contracts(pack_dir, manifest)
-    contracts_by_id = {c["id"]: c for c in contracts}
-
-    for entry in manifest.get("skills", []):
-        if entry["id"] not in exposed:
-            continue
-
-        contract = contracts_by_id.get(entry["id"], {})
-        skill_name = entry["dir"].split("/")[-1]
-        yaml_path = Path(manifest.get("_repo_root", "") or str(pack_dir))
-
-        # The yaml is written to .agents/skills/<skill_name>/agents/openai.yaml
-        # which is inside the repo target, not in the pack.
-        # We need the repo_root here. Since this function doesn't receive it,
-        # we handle it in the caller.
-        pass
-
-
 def _build_openai_yaml(
     contract: dict,
     entry_sk_path: Optional[str] = None,
