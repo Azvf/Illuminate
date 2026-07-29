@@ -1,8 +1,6 @@
 ---
 name: record-knowledge
 description: Incrementally record small, verified project knowledge discovered during development. Use when a task confirms a reusable convention, path rule, stable module responsibility, functional chain, boundary, or recurring failure mode. Update the smallest existing owner document; do not analyze or document the whole project.
-recommended_next:
-  - illuminate.tidy-doc
 ---
 
 # Record Knowledge
@@ -149,5 +147,7 @@ record-knowledge
              ↓
          推荐 tidy-doc
 ```
+
+发现文档体系混乱（多份重复文档、owner 不清晰、索引失效、Guidelines 与 Framework 混杂）时可考虑调用 `tidy-doc`。
 
 `tidy-doc` 负责多文档整理、消除重复、修复旧路径、统一 owner。但不要每次 `record-knowledge` 后自动执行。
