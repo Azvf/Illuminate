@@ -1,0 +1,35 @@
+{
+  "abstraction_keywords": [
+    "Factory", "Adapter", "Wrapper", "Registry",
+    "Manager", "Provider", "Bridge", "Converter",
+    "Proxy", "Decorator", "Strategy", "Handler",
+    "Controller", "Builder", "Pipeline", "Chain",
+    "Compat", "Legacy", "Retry", "Fallback"
+  ],
+  "definition_keywords": [
+    "class", "struct", "interface", "trait",
+    "enum", "object", "protocol", "extension"
+  ],
+  "feature_flag_patterns": [
+    "#if(?:def|ndef)?\\b",
+    "#elif\\b",
+    "feature_?flag",
+    "enable_?feature",
+    "is_?feature_?enabled",
+    "use_?new",
+    "use_?legacy",
+    "enable_?new",
+    "disable_?new",
+    "\\bENABLE_",
+    "\\bDISABLE_",
+    "getenv\\s*\\(",
+    "os\\.environ",
+    "System\\.getenv",
+    "ProcessInfo",
+    "\\bFeatureFlag\\b"
+  ],
+  "fallback_patterns": {
+    "catch_keywords": ["catch", "except"],
+    "null_coalesce_chain": "\\?\\?.*\\?\\?"
+  }
+}

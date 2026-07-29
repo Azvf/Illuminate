@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "id": "illuminate.grilling",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+
+  "activation": {
+    "mode": "manual",
+    "include_tags": [
+      "plan.stress-test",
+      "design.review"
+    ],
+    "exclude_tags": []
+  },
+
+  "requirements": {
+    "required_artifacts": [],
+    "preferred_artifacts": [],
+    "commands": []
+  },
+
+  "permissions": {
+    "read": [
+      "repository/**"
+    ],
+    "write": [],
+    "execute": []
+  },
+
+  "relations": {
+    "recommended_next": [],
+    "conflicts_with": []
+  },
+
+  "outputs": [
+    "decision_tree",
+    "resolved_decisions",
+    "unresolved_items"
+  ]
+}

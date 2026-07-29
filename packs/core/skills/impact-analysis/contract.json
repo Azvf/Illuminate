@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "id": "illuminate.impact-analysis",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+
+  "activation": {
+    "mode": "auto",
+    "include_tags": [
+      "change.cross-module",
+      "change.cross-layer",
+      "api.modify",
+      "core-path.modify",
+      "regression.risk"
+    ],
+    "exclude_tags": [
+      "documentation.only",
+      "configuration.only"
+    ]
+  },
+
+  "requirements": {
+    "required_artifacts": [],
+    "preferred_artifacts": [
+      "test_suite"
+    ],
+    "commands": [
+      "git",
+      "grep"
+    ]
+  },
+
+  "permissions": {
+    "read": [
+      "repository/**"
+    ],
+    "write": [
+      ".illuminate/reports/**"
+    ],
+    "execute": [
+      "grep",
+      "rg"
+    ]
+  },
+
+  "relations": {
+    "recommended_next": [],
+    "conflicts_with": []
+  },
+
+  "outputs": [
+    "direct_impact_table",
+    "indirect_impact_graph",
+    "regression_risk_table",
+    "scope_minimization_confirmation"
+  ],
+
+  "project_context": {
+    "candidates": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "CONTRIBUTING.md",
+      "docs/Guidelines/**/*.md",
+      "docs/Framework/**/*.md"
+    ],
+    "required": false
+  }
+}

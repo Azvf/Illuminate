@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "id": "illuminate.layer-debug",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+
+  "activation": {
+    "mode": "auto",
+    "include_tags": [
+      "debug.functional",
+      "data.missing",
+      "parse.failure",
+      "cache.inconsistent",
+      "pipeline.broken"
+    ],
+    "exclude_tags": [
+      "performance.only",
+      "documentation.only"
+    ]
+  },
+
+  "requirements": {
+    "required_artifacts": [
+      "runtime_logs"
+    ],
+    "preferred_artifacts": [
+      "reproducible_input",
+      "real_data"
+    ],
+    "commands": [
+      "git",
+      "python"
+    ]
+  },
+
+  "execution_modes": {
+    "full": {
+      "requires": [
+        "runtime_logs",
+        "real_data"
+      ],
+      "may_declare_root_cause": true
+    },
+    "diagnostic": {
+      "requires": [
+        "runtime_logs"
+      ],
+      "may_declare_root_cause": false
+    },
+    "blocked": {
+      "requires": [],
+      "may_modify_code": false
+    }
+  },
+
+  "permissions": {
+    "read": [
+      "repository/**",
+      "logs/**"
+    ],
+    "write": [
+      "scripts/test/**",
+      ".illuminate/reports/**"
+    ],
+    "execute": [
+      "scripts/test/**"
+    ]
+  },
+
+  "relations": {
+    "recommended_next": [
+      "illuminate.backtrack-root-cause"
+    ],
+    "conflicts_with": [
+      "illuminate.perf-profile"
+    ]
+  },
+
+  "outputs": [
+    "symptom",
+    "first_divergence",
+    "layer_breakpoint_report",
+    "validation_result"
+  ],
+
+  "project_context": {
+    "candidates": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "CONTRIBUTING.md",
+      "docs/Guidelines/**/*.md",
+      "docs/Framework/**/*.md"
+    ],
+    "required": false
+  }
+}

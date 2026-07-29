@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "id": "illuminate.ref-align",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+
+  "activation": {
+    "mode": "auto",
+    "include_tags": [
+      "sdk.integration",
+      "api.integration",
+      "protocol.parsing",
+      "reference-product.alignment"
+    ],
+    "exclude_tags": []
+  },
+
+  "requirements": {
+    "required_artifacts": [],
+    "preferred_artifacts": [
+      "reference_product",
+      "api_spec"
+    ],
+    "commands": [
+      "git"
+    ]
+  },
+
+  "permissions": {
+    "read": [
+      "repository/**"
+    ],
+    "write": [
+      "repository/**",
+      "docs/Research/**"
+    ],
+    "execute": []
+  },
+
+  "relations": {
+    "recommended_next": [],
+    "conflicts_with": []
+  },
+
+  "outputs": [
+    "implementation",
+    "reverse_engineering_notes",
+    "contract_changes",
+    "unit_tests"
+  ],
+
+  "project_context": {
+    "candidates": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "CONTRIBUTING.md",
+      "docs/Guidelines/**/*.md",
+      "docs/Framework/**/*.md"
+    ],
+    "required": false
+  }
+}

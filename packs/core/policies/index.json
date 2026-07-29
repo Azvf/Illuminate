@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "policies": [
+    {
+      "id": "illuminate.evidence-first",
+      "path": "evidence-first.md",
+      "priority": 1000,
+      "strength": "mandatory"
+    },
+    {
+      "id": "illuminate.root-cause-first",
+      "path": "root-cause-first.md",
+      "priority": 900,
+      "strength": "mandatory"
+    },
+    {
+      "id": "illuminate.occam-engineering",
+      "path": "occam-engineering.md",
+      "priority": 800,
+      "strength": "default-deny"
+    },
+    {
+      "id": "illuminate.logging-first",
+      "path": "logging-first.md",
+      "priority": 700,
+      "strength": "mandatory"
+    },
+    {
+      "id": "illuminate.workflow",
+      "path": "workflow.md",
+      "priority": 600,
+      "strength": "mandatory"
+    }
+  ]
+}

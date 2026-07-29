@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "id": "illuminate.perf-profile",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+
+  "activation": {
+    "mode": "auto",
+    "include_tags": [
+      "performance.startup",
+      "performance.scroll",
+      "performance.load",
+      "performance.network",
+      "frame.drop"
+    ],
+    "exclude_tags": [
+      "debug.functional",
+      "documentation.only"
+    ]
+  },
+
+  "requirements": {
+    "required_artifacts": [
+      "runtime_logs"
+    ],
+    "preferred_artifacts": [
+      "profile_report"
+    ],
+    "commands": [
+      "git"
+    ]
+  },
+
+  "profile_types": [
+    "cpu",
+    "wall-clock",
+    "allocation",
+    "io",
+    "frame-time",
+    "network"
+  ],
+
+  "permissions": {
+    "read": [
+      "repository/**",
+      "logs/**"
+    ],
+    "write": [
+      ".illuminate/reports/**"
+    ],
+    "execute": []
+  },
+
+  "relations": {
+    "recommended_next": [
+      "illuminate.backtrack-root-cause"
+    ],
+    "conflicts_with": [
+      "illuminate.layer-debug"
+    ]
+  },
+
+  "outputs": [
+    "scenario",
+    "profile_type",
+    "hotspot_phase",
+    "root_cause_or_incomplete"
+  ],
+
+  "project_context": {
+    "candidates": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "CONTRIBUTING.md",
+      "docs/Guidelines/**/*.md",
+      "docs/Framework/**/*.md"
+    ],
+    "required": false
+  }
+}

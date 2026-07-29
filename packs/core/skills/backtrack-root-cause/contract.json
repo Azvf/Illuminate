@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "id": "illuminate.backtrack-root-cause",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+
+  "activation": {
+    "mode": "manual",
+    "include_tags": [
+      "patching.loop",
+      "dead-end",
+      "symptom-fixing"
+    ],
+    "exclude_tags": []
+  },
+
+  "requirements": {
+    "required_artifacts": [],
+    "preferred_artifacts": [
+      "runtime_logs",
+      "reproducible_input"
+    ],
+    "commands": [
+      "git"
+    ]
+  },
+
+  "permissions": {
+    "read": [
+      "repository/**",
+      "logs/**"
+    ],
+    "write": [
+      ".illuminate/reports/**"
+    ],
+    "execute": []
+  },
+
+  "relations": {
+    "recommended_next": [
+      "illuminate.layer-debug",
+      "illuminate.perf-profile"
+    ],
+    "conflicts_with": []
+  },
+
+  "outputs": [
+    "retrospective_log",
+    "call_chain_analysis",
+    "symptom_trigger_root_cause",
+    "fix_design"
+  ],
+
+  "project_context": {
+    "candidates": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "CONTRIBUTING.md",
+      "docs/Guidelines/**/*.md",
+      "docs/Framework/**/*.md"
+    ],
+    "required": false
+  }
+}

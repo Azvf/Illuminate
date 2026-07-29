@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "id": "illuminate.behavior-verification",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+
+  "activation": {
+    "mode": "auto",
+    "include_tags": [
+      "behavior.change",
+      "new.feature",
+      "bugfix",
+      "state-machine.change"
+    ],
+    "exclude_tags": [
+      "refactor.no-behavior-change",
+      "documentation.only",
+      "configuration.only"
+    ]
+  },
+
+  "requirements": {
+    "required_artifacts": [],
+    "preferred_artifacts": [
+      "test_suite",
+      "requirement_spec"
+    ],
+    "commands": []
+  },
+
+  "permissions": {
+    "read": [
+      "repository/**"
+    ],
+    "write": [
+      ".illuminate/reports/**"
+    ],
+    "execute": []
+  },
+
+  "relations": {
+    "recommended_next": [
+      "illuminate.layer-debug",
+      "illuminate.impact-analysis"
+    ],
+    "conflicts_with": []
+  },
+
+  "outputs": [
+    "behavior_space_model",
+    "verification_risks",
+    "missing_cases",
+    "required_tests"
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "id": "illuminate.simplify-code",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+
+  "activation": {
+    "mode": "auto",
+    "include_tags": [
+      "redundant.pass-through",
+      "multi-fallback",
+      "dual-track",
+      "fragmented-logic",
+      "multi-config-injection",
+      "comment-compensation"
+    ],
+    "exclude_tags": [
+      "behavior.change",
+      "documentation.only"
+    ]
+  },
+
+  "requirements": {
+    "required_artifacts": [],
+    "preferred_artifacts": [],
+    "commands": [
+      "git",
+      "grep"
+    ]
+  },
+
+  "permissions": {
+    "read": [
+      "repository/**"
+    ],
+    "write": [
+      "repository/**"
+    ],
+    "execute": [
+      "grep",
+      "rg"
+    ]
+  },
+
+  "relations": {
+    "recommended_next": [],
+    "conflicts_with": []
+  },
+
+  "outputs": [
+    "simplified_code",
+    "grep_verification",
+    "build_test_result"
+  ]
+}

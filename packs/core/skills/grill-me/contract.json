@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "id": "illuminate.grill-me",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+
+  "kind": "alias",
+  "target": "illuminate.grilling",
+  "disable_model_invocation": true,
+
+  "activation": {
+    "mode": "manual",
+    "include_tags": [],
+    "exclude_tags": []
+  },
+
+  "requirements": {
+    "required_artifacts": [],
+    "preferred_artifacts": [],
+    "commands": []
+  },
+
+  "relations": {
+    "recommended_next": [],
+    "conflicts_with": []
+  },
+
+  "outputs": []
+}

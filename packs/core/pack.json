@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "illuminate.core",
+  "version": "0.1.0",
+  "name": "Illuminate Core",
+  "description": "Core harness knowledge pack: policies, skills, references, and evidence tools",
+
+  "policies": {
+    "index": "policies/index.json"
+  },
+
+  "skills": [
+    { "id": "illuminate.layer-debug", "dir": "skills/layer-debug" },
+    { "id": "illuminate.impact-analysis", "dir": "skills/impact-analysis" },
+    { "id": "illuminate.perf-profile", "dir": "skills/perf-profile" },
+    { "id": "illuminate.behavior-verification", "dir": "skills/behavior-verification" },
+    { "id": "illuminate.backtrack-root-cause", "dir": "skills/backtrack-root-cause" },
+    { "id": "illuminate.simplify-code", "dir": "skills/simplify-code" },
+    { "id": "illuminate.grilling", "dir": "skills/grilling" },
+    { "id": "illuminate.ref-align", "dir": "skills/ref-align" },
+    { "id": "illuminate.tidy-doc", "dir": "skills/tidy-doc" },
+    { "id": "illuminate.grill-me", "dir": "skills/grill-me" }
+  ],
+
+  "references": [
+    { "id": "illuminate.code-clarity", "path": "references/code-clarity.md" },
+    { "id": "illuminate.document-hierarchy", "path": "references/document-hierarchy.md" },
+    { "id": "illuminate.evidence-layer", "path": "references/evidence-layer.md" }
+  ],
+
+  "evidence": {
+    "config": "evidence/patterns_config.json",
+    "overlay_example": "evidence/patterns_overlay.example.json"
+  }
+}
