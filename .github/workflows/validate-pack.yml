@@ -35,12 +35,12 @@ jobs:
       - name: Materialization skill filter smoke test
         run: |
           TMPDIR=$(mktemp -d)
-          illuminate mount create \
+          OUTPUT=$(illuminate mount create \
             --pack packs/core \
             --repo "$TMPDIR" \
             --skill illuminate.layer-debug \
-            --skill illuminate.grilling
-          SESSION_DIR=$(ls -d ~/.illuminate/sessions/*/ | head -1)
+            --skill illuminate.grilling 2>&1)
+          SESSION_DIR=$(echo "$OUTPUT" | grep -oP 'Dir:\s+\K\S+')
           test -f "$SESSION_DIR/.claude/skills/layer-debug/SKILL.md" && echo "PASS: layer-debug mounted"
           test ! -f "$SESSION_DIR/.claude/skills/perf-profile/SKILL.md" && echo "PASS: perf-profile excluded"
           echo "Skill filter smoke test passed"
@@ -58,7 +58,7 @@ jobs:
       - name: Mount verify smoke test
         run: |
           TMPDIR=$(mktemp -d)
-          SESSION_OUTPUT=$(illuminate mount create --pack packs/core --repo "$TMPDIR" 2>&1)
-          echo "$SESSION_OUTPUT"
-          SESSION_DIR=$(echo "$SESSION_OUTPUT" | grep -oP 'Dir:\s+\K\S+')
+          OUTPUT=$(illuminate mount create --pack packs/core --repo "$TMPDIR" 2>&1)
+          echo "$OUTPUT"
+          SESSION_DIR=$(echo "$OUTPUT" | grep -oP 'Dir:\s+\K\S+')
           illuminate mount verify "$SESSION_DIR" && echo "PASS: mount verify passed"
