@@ -87,20 +87,20 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
                     f"[{pack_id}] skill '{cid}' recommended_next references unknown skill: {ref}"
                 )
 
-        # Check conflicts_with references exist
-        for ref in contract.get("relations", {}).get("conflicts_with", []):
+        # Check not_recommended_with references exist
+        for ref in contract.get("relations", {}).get("not_recommended_with", []):
             if ref not in skill_ids:
                 errors.append(
-                    f"[{pack_id}] skill '{cid}' conflicts_with references unknown skill: {ref}"
+                    f"[{pack_id}] skill '{cid}' not_recommended_with references unknown skill: {ref}"
                 )
 
-        # Check conflicts_with is bidirectional
-        for ref in contract.get("relations", {}).get("conflicts_with", []):
+        # Check not_recommended_with is bidirectional
+        for ref in contract.get("relations", {}).get("not_recommended_with", []):
             ref_contract = next((c for c in contracts if c.get("id") == ref), None)
             if ref_contract:
-                if cid not in ref_contract.get("relations", {}).get("conflicts_with", []):
+                if cid not in ref_contract.get("relations", {}).get("not_recommended_with", []):
                     errors.append(
-                        f"[{pack_id}] conflicts_with not bidirectional: '{cid}' -> '{ref}' but not back"
+                        f"[{pack_id}] not_recommended_with not bidirectional: '{cid}' -> '{ref}' but not back"
                     )
 
         # Check alias doesn't form a cycle

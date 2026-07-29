@@ -112,15 +112,15 @@ def create_mount_plan(
         # Deduplicate (multiple aliases may resolve to same target)
         exposed = list(dict.fromkeys(resolved))
 
-    # Check conflicts_with violations (only when explicitly filtered)
+    # Check not_recommended_with violations (only when explicitly filtered)
     if skill_filter is not None:
         exposed_set = set(exposed)
         for contract in contracts:
             if contract["id"] in exposed_set:
-                for conflict in contract.get("relations", {}).get("conflicts_with", []):
+                for conflict in contract.get("relations", {}).get("not_recommended_with", []):
                     if conflict in exposed_set:
                         raise ValueError(
-                            f"Skill '{contract['id']}' conflicts with '{conflict}' — "
+                            f"Skill '{contract['id']}' not recommended with '{conflict}' — "
                             "cannot expose both in same mount"
                         )
 
@@ -152,12 +152,26 @@ def create_mount_plan(
     return plan
 
 
-def resolve_file_list(pack_dir: Path, mount_plan: dict) -> List[Dict[str, str]]:
+def resolve_file_list(
+    pack_dir: Path,
+    mount_plan: dict,
+    skill_mount_base: str = ".claude/skills",
+) -> List[Dict[str, str]]:
     """Resolve the complete list of files to mount for a plan.
 
-    Returns a list of {source, dest} dicts where source is the absolute path
-    in the pack and dest is the relative path in the session mount.
+    Returns a list of {source, dest, kind} dicts where:
+      source: absolute path in the pack
+      dest:   relative path in the session mount
+      kind:   "policy" | "skill" | "reference" | "evidence"
+
     Only skills listed in mount_plan["skills"]["exposed"] are included.
+
+    Args:
+        pack_dir: Path to the pack root.
+        mount_plan: The mount plan dict.
+        skill_mount_base: Destination directory for skill files
+                          (default ".claude/skills" for Claude,
+                           ".agents/skills" for Codex).
     """
     manifest = load_pack_manifest(pack_dir)
     policy_index = load_policy_index(pack_dir, manifest)
@@ -173,6 +187,7 @@ def resolve_file_list(pack_dir: Path, mount_plan: dict) -> List[Dict[str, str]]:
             files.append({
                 "source": str(src),
                 "dest": f"policies/{policy['path']}",
+                "kind": "policy",
             })
 
     # Skill files — only exposed skills
@@ -188,7 +203,8 @@ def resolve_file_list(pack_dir: Path, mount_plan: dict) -> List[Dict[str, str]]:
                 rel = file_path.relative_to(skill_dir)
                 files.append({
                     "source": str(file_path),
-                    "dest": f".claude/skills/{skill_name}/{rel}",
+                    "dest": f"{skill_mount_base}/{skill_name}/{rel}",
+                    "kind": "skill",
                 })
 
     # Reference files
@@ -198,6 +214,7 @@ def resolve_file_list(pack_dir: Path, mount_plan: dict) -> List[Dict[str, str]]:
             files.append({
                 "source": str(src),
                 "dest": ref_entry["path"],
+                "kind": "reference",
             })
 
     # Evidence config
@@ -210,6 +227,7 @@ def resolve_file_list(pack_dir: Path, mount_plan: dict) -> List[Dict[str, str]]:
                 files.append({
                     "source": str(src),
                     "dest": rel,
+                    "kind": "evidence",
                 })
 
     return files

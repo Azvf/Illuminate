@@ -12,7 +12,8 @@ def create_lock(
     session_dir: Path,
     session_id: str,
     pack_dir: Path,
-    effective_permissions: Optional[dict] = None,
+    permission_info: Optional[dict] = None,
+    external_files: Optional[List[tuple]] = None,
 ) -> dict:
     """Create a mount-lock.json for a session.
 
@@ -23,7 +24,10 @@ def create_lock(
         session_dir: Session directory on disk.
         session_id: Unique session identifier.
         pack_dir: Pack directory (for pack-level lock hash).
-        effective_permissions: Optional dict of actually enforced permissions.
+        permission_info: Optional dict with declared_permissions,
+                         enforced_permissions, and enforcement_status fields.
+        external_files: Optional list of (role, Path) tuples for files
+                        outside the session dir (e.g. codex profile).
     """
     files: List[Dict[str, str]] = []
 
@@ -45,9 +49,29 @@ def create_lock(
         "pack_lock_hash": lock_hash(pack_hash),
     }
 
-    if effective_permissions:
-        lock["effective_permissions"] = dict(effective_permissions)
+    if permission_info:
+        lock["declared_permissions"] = dict(permission_info.get("declared_permissions", {}))
+        lock["enforced_permissions"] = dict(permission_info.get("enforced_permissions", {}))
+        lock["enforcement_status"] = dict(permission_info.get("enforcement_status", {}))
+        lock["exposed_skills"] = list(permission_info.get("exposed_skills", []))
         lock["file_count"] = len(files)
+
+    if external_files:
+        lock["external_files"] = [
+            {
+                "role": role,
+                "path": str(path),
+                "sha256": hash_file(path),
+            }
+            for role, path in external_files
+        ]
+
+    lock_path = session_dir / "mount-lock.json"
+    with open(lock_path, "w", encoding="utf-8") as f:
+        json.dump(lock, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+    return lock
 
     lock_path = session_dir / "mount-lock.json"
     with open(lock_path, "w", encoding="utf-8") as f:
@@ -67,11 +91,14 @@ def load_lock(session_dir: Path) -> dict:
 def verify_lock(session_dir: Path) -> dict:
     """Verify session mount integrity against mount-lock.json.
 
+    Also verifies external files (e.g. codex profile) recorded in the lock.
+
     Returns a dict with:
       valid (bool): True if all hashes match and no extra files.
-      mismatch (list): Files whose hash changed.
+      mismatch (list): Files whose hash changed (session + external).
       missing (list): Files in lock but not on disk.
       extra (list): Files on disk but not in lock.
+      external_mismatch (list): External files whose hash changed.
       total_checked (int): Number of locked files verified.
     """
     lock = load_lock(session_dir)
@@ -104,10 +131,24 @@ def verify_lock(session_dir: Path) -> dict:
         if rel not in locked_set:
             extra.append(rel)
 
+    # Verify external files
+    external_mismatch = []
+    for ext in lock.get("external_files", []):
+        ext_path = Path(ext["path"])
+        if not ext_path.exists():
+            missing.append(f"[external] {ext['role']}: {ext['path']}")
+            continue
+        actual_hash = hash_file(ext_path)
+        if actual_hash != ext["sha256"]:
+            external_mismatch.append(f"[external] {ext['role']}: {ext['path']}")
+
+    all_mismatch = mismatch + external_mismatch
+
     return {
-        "valid": len(mismatch) == 0 and len(missing) == 0 and len(extra) == 0,
+        "valid": len(all_mismatch) == 0 and len(missing) == 0 and len(extra) == 0,
         "mismatch": mismatch,
         "missing": missing,
         "extra": extra,
+        "external_mismatch": external_mismatch,
         "total_checked": checked,
     }

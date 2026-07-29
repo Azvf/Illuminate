@@ -90,8 +90,14 @@ def _generate_claude_settings(mount_plan, contracts):
     }
 
 
-def _gather_effective_permissions(mount_plan, contracts) -> dict:
-    """Aggregate effective permissions from the active contracts for the mount lock."""
+def _gather_permissions(mount_plan, contracts) -> dict:
+    """Aggregate declared and enforced permissions for the mount lock.
+
+    Returns a dict with:
+      declared_permissions: All permissions from contracts (read/write/execute)
+      enforced_permissions: What is actually compiled into claude-settings
+      enforcement_status:  Per-category enforcement level
+    """
     exposed = set(mount_plan["skills"]["exposed"])
     allow_exec = set()
     allow_read = set()
@@ -106,9 +112,19 @@ def _gather_effective_permissions(mount_plan, contracts) -> dict:
         for perm in contract.get("permissions", {}).get("write", []):
             allow_write.add(perm)
     return {
-        "read": sorted(allow_read),
-        "write": sorted(allow_write),
-        "execute": sorted(allow_exec),
+        "declared_permissions": {
+            "read": sorted(allow_read),
+            "write": sorted(allow_write),
+            "execute": sorted(allow_exec),
+        },
+        "enforced_permissions": {
+            "execute": sorted(allow_exec),
+        },
+        "enforcement_status": {
+            "read": "not-enforced",
+            "write": "not-enforced",
+            "execute": "partial",
+        },
         "exposed_skills": sorted(exposed),
     }
 
@@ -173,13 +189,13 @@ def materialize_session(pack_dir, repo, harness="claude-code", skill_filter=None
         json.dump(mount_plan, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
-    # Collect effective permissions for lock
-    effective_permissions = _gather_effective_permissions(mount_plan, contracts)
+    # Collect declared and enforced permissions for lock
+    permission_info = _gather_permissions(mount_plan, contracts)
 
     # Create mount-lock.json
     lock = create_lock(
         session_dir, session_id, pack_dir,
-        effective_permissions=effective_permissions,
+        permission_info=permission_info,
     )
 
     return {
