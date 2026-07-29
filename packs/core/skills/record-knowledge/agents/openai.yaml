@@ -1,0 +1,7 @@
+interface:
+  display_name: "Record Knowledge"
+  short_description: "Incrementally record small, verified project knowledge — conventions, paths, module flows, boundaries, or failure modes"
+  default_prompt: "Record the verified facts from this task. Determine if they are cross-module (docs/Guidelines/) or module-specific (docs/Framework/). Update the smallest existing owner document."
+
+policy:
+  allow_implicit_invocation: false

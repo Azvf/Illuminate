@@ -19,6 +19,7 @@
     { "id": "illuminate.grilling", "dir": "skills/grilling" },
     { "id": "illuminate.ref-align", "dir": "skills/ref-align" },
     { "id": "illuminate.tidy-doc", "dir": "skills/tidy-doc" },
+    { "id": "illuminate.record-knowledge", "dir": "skills/record-knowledge" },
     { "id": "illuminate.grill-me", "dir": "skills/grill-me" }
   ],
 

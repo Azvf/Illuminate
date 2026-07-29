@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "id": "illuminate.record-knowledge",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+
+  "activation": {
+    "mode": "explicit-preferred",
+    "include_tags": [
+      "knowledge.record",
+      "convention.record",
+      "path-rule.record",
+      "module-flow.record",
+      "module-boundary.record",
+      "failure-mode.record"
+    ],
+    "exclude_tags": [
+      "project-wide-analysis",
+      "documentation.cleanup",
+      "temporary-debug-note"
+    ]
+  },
+
+  "requirements": {
+    "required_artifacts": [
+      "verified_fact"
+    ],
+    "preferred_artifacts": [
+      "implementation_anchor"
+    ],
+    "commands": [
+      "git",
+      "rg"
+    ]
+  },
+
+  "permissions": {
+    "read": [
+      "repository/**"
+    ],
+    "write": [
+      "docs/Guidelines/**",
+      "docs/Framework/**",
+      "docs/文档索引.md"
+    ],
+    "execute": [
+      "git diff",
+      "rg"
+    ]
+  },
+
+  "relations": {
+    "recommended_next": [
+      "illuminate.tidy-doc"
+    ],
+    "not_recommended_with": []
+  },
+
+  "project_context": {
+    "candidates": [
+      "docs/Guidelines/**/*.md",
+      "docs/Framework/**/*.md"
+    ],
+    "required": false
+  },
+
+  "outputs": [
+    "knowledge_level",
+    "owner_document",
+    "recorded_facts",
+    "implementation_anchors"
+  ]
+}
