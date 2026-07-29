@@ -1,0 +1,45 @@
+[
+  {
+    "request": "分析启动时卡顿，给出最重阶段",
+    "expected_skill": "illuminate.perf-profile"
+  },
+  {
+    "request": "字段解析后丢失，需要定位在哪一层消失",
+    "expected_skill": "illuminate.layer-debug"
+  },
+  {
+    "request": "改动会修改 public API，需要评估影响范围",
+    "expected_skill": "illuminate.impact-analysis"
+  },
+  {
+    "request": "新功能需要验证是否改变了正确行为",
+    "expected_skill": "illuminate.behavior-verification"
+  },
+  {
+    "request": "反复打补丁无效，需要回到根因分析",
+    "expected_skill": "illuminate.backtrack-root-cause"
+  },
+  {
+    "request": "代码中有多层 fallback 链，需要精简",
+    "expected_skill": "illuminate.simplify-code"
+  },
+  {
+    "request": "对接第三方 SDK，需要先逆向再实现",
+    "expected_skill": "illuminate.ref-align"
+  },
+  {
+    "request": "需要压力测试这个方案",
+    "expected_skill": "illuminate.grilling"
+  },
+  {
+    "request": "整理 AGENTS.md 和 skill 文档",
+    "expected_skill": "illuminate.tidy-doc"
+  },
+  {
+    "request": "只修正文档里的错别字",
+    "expected_excluded": [
+      "illuminate.behavior-verification",
+      "illuminate.impact-analysis"
+    ]
+  }
+]
