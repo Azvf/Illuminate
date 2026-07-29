@@ -10,6 +10,10 @@ build/
 # Illuminate generated
 .illuminate/
 
+# Legacy compatibility (auto-generated, canonical source lives in packs/)
+.claude/
+.evidence/
+
 # IDE
 .vscode/
 .idea/
