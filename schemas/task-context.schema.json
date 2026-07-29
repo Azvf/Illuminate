@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Illuminate Task Context",
+  "type": "object",
+  "required": ["schema_version", "task"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "task": {
+      "type": "object",
+      "required": ["description"],
+      "properties": {
+        "description": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "properties": {
+        "runtime_logs": { "type": "boolean" },
+        "real_data": { "type": "boolean" },
+        "reproducible_input": { "type": "boolean" }
+      }
+    },
+    "available_commands": { "type": "array", "items": { "type": "string" } }
+  }
+}

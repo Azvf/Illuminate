@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Illuminate Pack Manifest",
+  "type": "object",
+  "required": ["schema_version", "id", "version", "name", "skills"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9.-]+$",
+      "description": "Pack identifier, e.g. illuminate.core"
+    },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "policies": {
+      "type": "object",
+      "properties": {
+        "index": { "type": "string" }
+      }
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "dir"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9.-]+$" },
+          "dir": { "type": "string" }
+        }
+      }
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "path"],
+        "properties": {
+          "id": { "type": "string" },
+          "path": { "type": "string" }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "config": { "type": "string" },
+        "overlay_example": { "type": "string" }
+      }
+    }
+  }
+}

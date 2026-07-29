@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Illuminate Skill Contract",
+  "type": "object",
+  "required": ["schema_version", "id", "version", "entry", "activation"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9.-]+$",
+      "description": "Skill identifier, e.g. illuminate.layer-debug"
+    },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+" },
+    "entry": { "type": "string", "description": "Path to SKILL.md relative to skill dir" },
+    "kind": {
+      "type": "string",
+      "enum": ["skill", "alias"],
+      "default": "skill"
+    },
+    "target": {
+      "type": "string",
+      "description": "For alias kind: target skill id"
+    },
+    "disable_model_invocation": { "type": "boolean", "default": false },
+
+    "activation": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["auto", "manual"] },
+        "include_tags": { "type": "array", "items": { "type": "string" } },
+        "exclude_tags": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "requirements": {
+      "type": "object",
+      "properties": {
+        "required_artifacts": { "type": "array", "items": { "type": "string" } },
+        "preferred_artifacts": { "type": "array", "items": { "type": "string" } },
+        "commands": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "execution_modes": {
+      "type": "object",
+      "description": "Optional: defines degraded execution modes",
+      "properties": {
+        "full": { "$ref": "#/definitions/execution_mode" },
+        "diagnostic": { "$ref": "#/definitions/execution_mode" },
+        "blocked": { "$ref": "#/definitions/execution_mode" }
+      }
+    },
+
+    "permissions": {
+      "type": "object",
+      "properties": {
+        "read": { "type": "array", "items": { "type": "string" } },
+        "write": { "type": "array", "items": { "type": "string" } },
+        "execute": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "relations": {
+      "type": "object",
+      "properties": {
+        "recommended_next": { "type": "array", "items": { "type": "string" } },
+        "conflicts_with": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "outputs": { "type": "array", "items": { "type": "string" } },
+
+    "project_context": {
+      "type": "object",
+      "properties": {
+        "candidates": { "type": "array", "items": { "type": "string" } },
+        "required": { "type": "boolean", "default": false }
+      }
+    },
+
+    "profile_types": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional: for perf-related skills, types of profiles supported"
+    }
+  },
+
+  "definitions": {
+    "execution_mode": {
+      "type": "object",
+      "properties": {
+        "requires": { "type": "array", "items": { "type": "string" } },
+        "may_declare_root_cause": { "type": "boolean" },
+        "may_modify_code": { "type": "boolean", "default": true }
+      }
+    }
+  }
+}
