@@ -71,7 +71,7 @@
     "recommended_next": [
       "illuminate.backtrack-root-cause"
     ],
-    "conflicts_with": [
+    "not_recommended_with": [
       "illuminate.perf-profile"
     ]
   },
