@@ -1,6 +1,6 @@
 """Resolve a pack into a mount plan: which policies, skills, and files to mount."""
 
-import json
+import subprocess
 import uuid
 from pathlib import Path
 from typing import List, Dict
@@ -9,10 +9,40 @@ from .manifest import (
     load_pack_manifest,
     load_policy_index,
     load_skill_contracts,
-    get_skill_dirs,
-    get_policy_files,
-    get_reference_files,
 )
+
+
+def _resolve_repo(repo: str) -> dict:
+    """Resolve repo path and collect git identity info.
+
+    Returns dict with at minimum {"path": "..."} plus git_root/head/remote
+    when available.
+    """
+    repo_path = Path(repo).expanduser().resolve()
+    info = {"path": str(repo_path)}
+    if not repo_path.is_dir():
+        return info
+    try:
+        git_root = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(repo_path), stderr=subprocess.DEVNULL, text=True
+        ).strip()
+        git_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_path), stderr=subprocess.DEVNULL, text=True
+        ).strip()
+        info.update({
+            "git_root": git_root,
+            "head": git_head,
+        })
+        remote = subprocess.check_output(
+            ["git", "remote", "get-url", "origin"],
+            cwd=str(repo_path), stderr=subprocess.DEVNULL, text=True
+        ).strip()
+        info["remote"] = remote
+    except Exception:
+        pass
+    return info
 
 
 def create_mount_plan(
@@ -27,11 +57,29 @@ def create_mount_plan(
         pack_dir: Path to the pack root (containing pack.json).
         repo: Target repository path.
         harness: Target harness name.
-        skill_filter: Optional list of skill ids to expose. If None, all non-alias skills are exposed.
+        skill_filter: Optional list of skill ids to expose.
+            If None, all non-alias skills are exposed.
+            Aliases are resolved to their targets.
+
+    Raises:
+        ValueError: If skill_filter contains unknown IDs or conflicting
+                    skills are selected together.
     """
     manifest = load_pack_manifest(pack_dir)
     policy_index = load_policy_index(pack_dir, manifest)
     contracts = load_skill_contracts(pack_dir, manifest)
+
+    # Resolve repo path + git identity
+    repo_info = _resolve_repo(repo)
+
+    # Build alias map
+    alias_map = {}
+    for contract in contracts:
+        if contract.get("kind") == "alias":
+            alias_map[contract["id"]] = contract.get("target", "")
+
+    # All skill IDs defined in manifest
+    all_skill_ids = {entry["id"] for entry in manifest.get("skills", [])}
 
     # Determine exposed skills
     if skill_filter is None:
@@ -40,9 +88,43 @@ def create_mount_plan(
             if c.get("kind", "skill") != "alias"
         ]
     else:
-        exposed = skill_filter
+        # Validate filter IDs exist
+        unknown = [sid for sid in skill_filter if sid not in all_skill_ids]
+        if unknown:
+            raise ValueError(
+                f"Unknown skill ID(s) in filter: {', '.join(unknown)}"
+            )
 
-    # Collect policy ids in priority order
+        # Resolve aliases → targets
+        resolved = []
+        for sid in skill_filter:
+            current = sid
+            visited = set()
+            while current in alias_map:
+                if current in visited:
+                    raise ValueError(
+                        f"Alias cycle detected resolving '{sid}'"
+                    )
+                visited.add(current)
+                current = alias_map[current]
+            resolved.append(current)
+
+        # Deduplicate (multiple aliases may resolve to same target)
+        exposed = list(dict.fromkeys(resolved))
+
+    # Check conflicts_with violations (only when explicitly filtered)
+    if skill_filter is not None:
+        exposed_set = set(exposed)
+        for contract in contracts:
+            if contract["id"] in exposed_set:
+                for conflict in contract.get("relations", {}).get("conflicts_with", []):
+                    if conflict in exposed_set:
+                        raise ValueError(
+                            f"Skill '{contract['id']}' conflicts with '{conflict}' — "
+                            "cannot expose both in same mount"
+                        )
+
+    # Collect policy ids
     policies = sorted(
         policy_index.get("policies", []),
         key=lambda p: p.get("priority", 0),
@@ -53,7 +135,7 @@ def create_mount_plan(
     plan = {
         "schema_version": 1,
         "session_id": str(uuid.uuid4()),
-        "repo": str(repo),
+        "repo": repo_info,
         "harness": harness,
         "packs": [
             {
@@ -75,10 +157,12 @@ def resolve_file_list(pack_dir: Path, mount_plan: dict) -> List[Dict[str, str]]:
 
     Returns a list of {source, dest} dicts where source is the absolute path
     in the pack and dest is the relative path in the session mount.
+    Only skills listed in mount_plan["skills"]["exposed"] are included.
     """
     manifest = load_pack_manifest(pack_dir)
     policy_index = load_policy_index(pack_dir, manifest)
-    contracts = load_skill_contracts(pack_dir, manifest)
+
+    exposed = set(mount_plan["skills"]["exposed"])
 
     files: List[Dict[str, str]] = []
 
@@ -91,17 +175,20 @@ def resolve_file_list(pack_dir: Path, mount_plan: dict) -> List[Dict[str, str]]:
                 "dest": f"policies/{policy['path']}",
             })
 
-    # Skill files (SKILL.md + contract.json + any references/ subdirs)
+    # Skill files — only exposed skills
     for entry in manifest.get("skills", []):
+        if entry["id"] not in exposed:
+            continue
         skill_dir = pack_dir / entry["dir"]
         if not skill_dir.exists():
             continue
         for file_path in sorted(skill_dir.rglob("*")):
             if file_path.is_file():
-                rel = file_path.relative_to(pack_dir)
+                skill_name = entry["dir"].split("/")[-1]
+                rel = file_path.relative_to(skill_dir)
                 files.append({
                     "source": str(file_path),
-                    "dest": f".claude/skills/{entry['dir'].split('/')[-1]}/{file_path.relative_to(skill_dir)}",
+                    "dest": f".claude/skills/{skill_name}/{rel}",
                 })
 
     # Reference files
@@ -110,7 +197,7 @@ def resolve_file_list(pack_dir: Path, mount_plan: dict) -> List[Dict[str, str]]:
         if src.exists():
             files.append({
                 "source": str(src),
-                "dest": f"references/{ref_entry['path']}",
+                "dest": ref_entry["path"],
             })
 
     # Evidence config
@@ -122,7 +209,7 @@ def resolve_file_list(pack_dir: Path, mount_plan: dict) -> List[Dict[str, str]]:
             if src.exists():
                 files.append({
                     "source": str(src),
-                    "dest": f"evidence/{rel}",
+                    "dest": rel,
                 })
 
     return files

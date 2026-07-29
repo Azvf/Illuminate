@@ -6,16 +6,25 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .resolve import create_mount_plan, resolve_file_list
 from .lockfile import create_lock
 from .manifest import load_pack_manifest, load_policy_index, load_skill_contracts
 from .hashutil import hash_directory, lock_hash
+from .validate import validate_pack
 
 
 def _get_session_base():
     return Path.home() / ".illuminate" / "sessions"
+
+
+def _get_repo_display(mount_plan) -> str:
+    """Extract a displayable repo path from mount_plan, handling dict or string."""
+    raw = mount_plan["repo"]
+    if isinstance(raw, dict):
+        return raw.get("path", str(raw))
+    return str(raw)
 
 
 def _generate_claude_md(pack_dir, mount_plan):
@@ -32,7 +41,7 @@ def _generate_claude_md(pack_dir, mount_plan):
         "# Illuminate Session — Claude Code",
         "",
         f"Pack: {manifest['id']} v{manifest['version']}",
-        f"Repo: {mount_plan['repo']}",
+        f"Repo: {_get_repo_display(mount_plan)}",
         f"Session: {mount_plan['session_id']}",
         "",
         "## Policies (always active, in priority order)",
@@ -81,6 +90,29 @@ def _generate_claude_settings(mount_plan, contracts):
     }
 
 
+def _gather_effective_permissions(mount_plan, contracts) -> dict:
+    """Aggregate effective permissions from the active contracts for the mount lock."""
+    exposed = set(mount_plan["skills"]["exposed"])
+    allow_exec = set()
+    allow_read = set()
+    allow_write = set()
+    for contract in contracts:
+        if contract["id"] not in exposed:
+            continue
+        for perm in contract.get("permissions", {}).get("execute", []):
+            allow_exec.add(perm)
+        for perm in contract.get("permissions", {}).get("read", []):
+            allow_read.add(perm)
+        for perm in contract.get("permissions", {}).get("write", []):
+            allow_write.add(perm)
+    return {
+        "read": sorted(allow_read),
+        "write": sorted(allow_write),
+        "execute": sorted(allow_exec),
+        "exposed_skills": sorted(exposed),
+    }
+
+
 def materialize_session(pack_dir, repo, harness="claude-code", skill_filter=None):
     """Materialize a Claude Code session from a pack.
 
@@ -88,9 +120,20 @@ def materialize_session(pack_dir, repo, harness="claude-code", skill_filter=None
     with CLAUDE.md, .claude/skills/, claude-settings.json, mount-plan.json,
     and mount-lock.json.
 
+    Validates the pack before materialization.
+    Permissions and file lists are scoped to the exposed skill set.
+
     Returns a dict with session info.
     """
     pack_dir = Path(pack_dir).resolve()
+
+    # Validate pack before any IO
+    ok, errors = validate_pack(pack_dir)
+    if not ok:
+        raise ValueError(
+            "Pack validation failed — refusing to materialize:\n"
+            + "\n".join(errors)
+        )
 
     mount_plan = create_mount_plan(pack_dir, repo, harness, skill_filter)
     session_id = mount_plan["session_id"]
@@ -101,7 +144,7 @@ def materialize_session(pack_dir, repo, harness="claude-code", skill_filter=None
     claude_md = _generate_claude_md(pack_dir, mount_plan)
     (session_dir / "CLAUDE.md").write_text(claude_md, encoding="utf-8")
 
-    # Copy skill files
+    # Copy files (skill filtering happens inside resolve_file_list)
     manifest = load_pack_manifest(pack_dir)
     contracts = load_skill_contracts(pack_dir, manifest)
     file_list = resolve_file_list(pack_dir, mount_plan)
@@ -111,8 +154,14 @@ def materialize_session(pack_dir, repo, harness="claude-code", skill_filter=None
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dest)
 
+    # Use only exposed contracts for permissions
+    exposed = set(mount_plan["skills"]["exposed"])
+    active_contracts = [
+        c for c in contracts if c["id"] in exposed
+    ]
+
     # Generate claude-settings.json
-    settings = _generate_claude_settings(mount_plan, contracts)
+    settings = _generate_claude_settings(mount_plan, active_contracts)
     settings_path = session_dir / "claude-settings.json"
     with open(settings_path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2, ensure_ascii=False)
@@ -124,8 +173,14 @@ def materialize_session(pack_dir, repo, harness="claude-code", skill_filter=None
         json.dump(mount_plan, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
+    # Collect effective permissions for lock
+    effective_permissions = _gather_effective_permissions(mount_plan, contracts)
+
     # Create mount-lock.json
-    lock = create_lock(session_dir, session_id, pack_dir)
+    lock = create_lock(
+        session_dir, session_id, pack_dir,
+        effective_permissions=effective_permissions,
+    )
 
     return {
         "session_id": session_id,
@@ -152,30 +207,59 @@ def _build_env():
     return env
 
 
-def launch_session(session_info):
+def launch_session(session_info, dry_run=False):
     """Launch a Claude Code session.
 
-    Prints the command for the user to run (first version does not
-    auto-spawn to avoid blocking).
+    In dry_run mode, prints the command for the user to run.
+    Otherwise, spawns claude with cwd set to the target repository.
     """
-    session_dir = session_info["session_dir"]
+    session_dir = Path(session_info["session_dir"])
+    mount_plan = session_info["mount_plan"]
+    repo_path = mount_plan["repo"]["path"] if isinstance(mount_plan["repo"], dict) else mount_plan["repo"]
     cmd = _build_claude_command(session_dir)
     env = _build_env()
-
-    # Print the command for the user to run
     env_prefix = "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1"
-    print("\nSession materialized successfully.", file=sys.stderr)
-    print(f"  Session: {session_info['session_id']}", file=sys.stderr)
-    print(f"  Dir:     {session_dir}", file=sys.stderr)
-    print(f"  Lock:    {session_info['lock']['pack_lock_hash']}", file=sys.stderr)
-    print(file=sys.stderr)
-    print("Run this command to start:", file=sys.stderr)
+
+    print(f"\nSession: {session_info['session_id']}", file=sys.stderr)
+    print(f"  Dir:   {session_dir}", file=sys.stderr)
+    print(f"  Repo:  {repo_path}", file=sys.stderr)
+    print(f"  Lock:  {session_info['lock']['pack_lock_hash']}", file=sys.stderr)
+
+    if dry_run:
+        print(file=sys.stderr)
+        print("Launch command (dry-run):", file=sys.stderr)
+        print(file=sys.stderr)
+        if sys.platform == "win32":
+            print(f'  cd /d "{repo_path}"', file=sys.stderr)
+            print(f'  $env:CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = "1"', file=sys.stderr)
+            print(f'  claude --add-dir "{session_dir}" --settings "{session_dir}\\claude-settings.json"', file=sys.stderr)
+        else:
+            print(f'  cd "{repo_path}" && \\', file=sys.stderr)
+            print(f'  {env_prefix} claude --add-dir "{session_dir}" --settings "{session_dir}/claude-settings.json"', file=sys.stderr)
+        print(file=sys.stderr)
+        return 0
+
+    print(f"  Launching claude...", file=sys.stderr)
     print(file=sys.stderr)
 
-    if sys.platform == "win32":
-        print(f'  $env:CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = "1"', file=sys.stderr)
-        print(f'  claude --add-dir "{session_dir}" --settings "{session_dir}\\claude-settings.json"', file=sys.stderr)
-    else:
-        print(f'  {env_prefix} claude --add-dir "{session_dir}" --settings "{session_dir}/claude-settings.json"', file=sys.stderr)
-
-    print(file=sys.stderr)
+    try:
+        completed = subprocess.run(
+            cmd,
+            cwd=repo_path,
+            env=env,
+            check=False,
+        )
+        return completed.returncode
+    except FileNotFoundError:
+        print(
+            "Error: 'claude' command not found. "
+            "Make sure Claude Code CLI is installed and on PATH.",
+            file=sys.stderr,
+        )
+        print(file=sys.stderr)
+        print("Alternatively, use --dry-run to see the launch command:", file=sys.stderr)
+        launch_session(session_info, dry_run=True)
+        return 1
+    except Exception as e:
+        print(f"Error launching claude: {e}", file=sys.stderr)
+        return 1
