@@ -142,7 +142,13 @@ rg -n '\\n|\\\\n|\\r\\n|\\t' docs --glob '*.md'
 
 命中不一定全部错误，但都应人工确认。
 
-具备条件时可运行 `python packs/core/skills/tidy-doc/scripts/check_doc_quality.py` 做更精确的检查。
+具备条件时可运行当前 tidy-doc Skill 目录下的扫描脚本做更精确的检查：
+
+```bash
+python scripts/check_doc_quality.py --docs-dir docs
+```
+
+不得假设 Skill 位于 `packs/core/skills/`；在 Codex / CodeBuddy / Claude 等目标项目中，Skill 实际路径分别为 `.agents/skills/` / `.codebuddy/skills/` / `.claude/skills/`。以 `SKILL.md` 所在目录为基准定位 `scripts/check_doc_quality.py`。
 
 #### 检查 Mermaid
 
