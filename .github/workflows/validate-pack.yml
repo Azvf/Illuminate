@@ -62,3 +62,33 @@ jobs:
           echo "$OUTPUT"
           SESSION_DIR=$(echo "$OUTPUT" | grep -oP 'Dir:\s+\K\S+')
           illuminate mount verify "$SESSION_DIR" && echo "PASS: mount verify passed"
+
+      - name: CodeBuddy sync smoke test
+        run: |
+          TMPDIR=$(mktemp -d)
+          illuminate sync codebuddy --pack packs/core --repo "$TMPDIR"
+          test -d "$TMPDIR/.codebuddy/rules/illuminate" && echo "PASS: rules synced"
+          test -d "$TMPDIR/.codebuddy/skills/layer-debug" && echo "PASS: skills synced"
+          test -f "$TMPDIR/.codebuddy/commands/record-knowledge.md" && echo "PASS: commands synced"
+          test -f "$TMPDIR/.illuminate/codebuddy-lock.json" && echo "PASS: lock created"
+
+      - name: CodeBuddy sync filter smoke test
+        run: |
+          TMPDIR=$(mktemp -d)
+          illuminate sync codebuddy --pack packs/core --repo "$TMPDIR" --skill illuminate.record-knowledge
+          test -d "$TMPDIR/.codebuddy/skills/record-knowledge" && echo "PASS: record-knowledge synced"
+          test ! -d "$TMPDIR/.codebuddy/skills/layer-debug" && echo "PASS: layer-debug excluded"
+
+      - name: CodeBuddy sync check smoke test
+        run: |
+          TMPDIR=$(mktemp -d)
+          illuminate sync codebuddy --pack packs/core --repo "$TMPDIR"
+          illuminate sync check --repo "$TMPDIR" --harness codebuddy && echo "PASS: check passed"
+
+      - name: CodeBuddy sync clean smoke test
+        run: |
+          TMPDIR=$(mktemp -d)
+          illuminate sync codebuddy --pack packs/core --repo "$TMPDIR"
+          illuminate sync clean --repo "$TMPDIR" --harness codebuddy
+          test ! -d "$TMPDIR/.codebuddy/rules/illuminate" && echo "PASS: rules cleaned"
+          test -f "$TMPDIR/.codebuddy/CODEBUDDY.md" && echo "PASS: CODEBUDDY.md preserved"
