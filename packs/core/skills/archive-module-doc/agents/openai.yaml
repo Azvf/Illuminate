@@ -1,0 +1,7 @@
+interface:
+  display_name: "Archive Module Documentation"
+  short_description: "Organize verified knowledge for one module into a compact, standard, or extended Framework documentation set"
+  default_prompt: "Archive the accumulated knowledge for this module into structured Framework documentation"
+
+policy:
+  allow_implicit_invocation: false

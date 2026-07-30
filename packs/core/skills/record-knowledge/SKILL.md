@@ -136,18 +136,26 @@ $record-knowledge 记录 Manifest 配置来源和覆盖关系
 
 只更新已有文档中的一个小章节时，不需要修改索引。
 
-## 与 tidy-doc 的边界
+## 与 archive-module-doc 和 tidy-doc 的边界
 
 ```
 record-knowledge
     │
     ├── 正常情况：只更新目标文档，结束
     │
+    ├── 模块知识积累到一定规模，需要结构化
+    │        ↓
+    │    推荐 archive-module-doc
+    │
     └── 发现文档体系混乱
              ↓
          推荐 tidy-doc
 ```
 
+- 小知识增量由 `record-knowledge` 维护
+- 模块知识达到一定规模后，由 `archive-module-doc` 整理为结构化文档集
+- 跨模块治理由 `tidy-doc` 处理
+
 发现文档体系混乱（多份重复文档、owner 不清晰、索引失效、Guidelines 与 Framework 混杂）时可考虑调用 `tidy-doc`。
 
-`tidy-doc` 负责多文档整理、消除重复、修复旧路径、统一 owner。但不要每次 `record-knowledge` 后自动执行。
+不要每次 `record-knowledge` 后自动执行任何整理 Skill。

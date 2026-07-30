@@ -1,36 +1,32 @@
 {
   "schema_version": 1,
-  "id": "illuminate.record-knowledge",
+  "id": "illuminate.archive-module-doc",
   "version": "1.0.0",
   "entry": "SKILL.md",
 
   "activation": {
     "mode": "explicit-preferred",
     "include_tags": [
-      "knowledge.record",
-      "convention.record",
-      "path-rule.record",
-      "module-flow.record",
-      "module-boundary.record",
-      "failure-mode.record"
+      "module-doc.archive",
+      "module-doc.split",
+      "module-doc.structure",
+      "module-doc.index"
     ],
     "exclude_tags": [
-      "project-wide-analysis",
-      "documentation.cleanup",
-      "temporary-debug-note"
+      "project-wide-doc-cleanup",
+      "new-knowledge-record",
+      "unverified-module-analysis"
     ]
   },
 
   "requirements": {
     "required_artifacts": [
-      "verified_fact"
+      "module_identity",
+      "existing_verified_knowledge"
     ],
     "preferred_artifacts": [
-      "implementation_anchor"
-    ],
-    "commands": [
-      "git",
-      "rg"
+      "module_source_root",
+      "existing_framework_owner"
     ]
   },
 
@@ -39,7 +35,6 @@
       "repository/**"
     ],
     "write": [
-      "docs/Guidelines/**",
       "docs/Framework/**",
       "docs/文档索引.md"
     ],
@@ -50,25 +45,28 @@
   },
 
   "relations": {
-    "recommended_next": [
-      "illuminate.archive-module-doc",
-      "illuminate.tidy-doc"
+    "recommended_previous": [
+      "illuminate.record-knowledge"
     ],
-    "not_recommended_with": []
+    "recommended_next": [
+      "illuminate.tidy-doc"
+    ]
   },
 
   "project_context": {
     "candidates": [
-      "docs/Guidelines/**/*.md",
       "docs/Framework/**/*.md"
     ],
     "required": false
   },
 
   "outputs": [
-    "knowledge_level",
-    "owner_document",
-    "recorded_facts",
-    "implementation_anchors"
+    "module_scope",
+    "archive_mode",
+    "document_map",
+    "migrated_facts",
+    "unresolved_facts",
+    "removed_duplicates",
+    "validation_result"
   ]
 }
