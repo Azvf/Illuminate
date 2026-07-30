@@ -11,6 +11,7 @@ Commands:
     illuminate compat generate [--pack <dir>]
     illuminate compat check [--pack <dir>]
     illuminate sync codex --repo <path> [--pack <dir>] [--skill <id>...]
+    illuminate sync codebuddy --repo <path> [--pack <dir>] [--skill <id>...]
     illuminate sync check --repo <path> [--pack <dir>]
     illuminate sync clean --repo <path>
     illuminate knowledge pull --repo <path> [--store <dir>]
@@ -31,7 +32,8 @@ from .materialize_claude import materialize_session, launch_session
 from .evidence.audit import run_audit
 from .lockfile import load_lock, verify_lock
 from .compat import compat_generate, compat_check
-from .sync_codex import sync_codex, check_sync, clean_sync
+from .sync_codex import sync_codex, check_sync as check_codex_sync, clean_sync as clean_codex_sync
+from .sync_codebuddy import sync_codebuddy, check_sync as check_codebuddy_sync, clean_sync as clean_codebuddy_sync
 from .knowledge_store import knowledge_pull, knowledge_status, knowledge_push
 
 
@@ -108,7 +110,7 @@ def _build_parser():
     cc = ps.add_parser("check", help="Check legacy compatibility dirs exist and are in sync")
     cc.add_argument("--pack", default="packs/core", help="Pack directory path")
 
-    # sync codex / check / clean
+    # sync codex / codebuddy / check / clean
     p = sub.add_parser("sync", help="Synchronize Pack into target repository")
     ps = p.add_subparsers(dest="sync_command")
 
@@ -118,12 +120,22 @@ def _build_parser():
     sc.add_argument("--skill", action="append", default=None,
                     help="Skill ID to sync (repeatable; default: all non-alias)")
 
-    sch = ps.add_parser("check", help="Verify Codex sync integrity")
+    scb = ps.add_parser("codebuddy", help="Synchronize for CodeBuddy (.codebuddy/rules/illuminate/ + skills + commands)")
+    scb.add_argument("--pack", default="packs/core", help="Pack directory path")
+    scb.add_argument("--repo", required=True, help="Target repository path")
+    scb.add_argument("--skill", action="append", default=None,
+                     help="Skill ID to sync (repeatable; default: all non-alias)")
+
+    sch = ps.add_parser("check", help="Verify sync integrity for Codex or CodeBuddy")
     sch.add_argument("--pack", default="packs/core", help="Pack directory path")
     sch.add_argument("--repo", required=True, help="Target repository path")
+    sch.add_argument("--harness", choices=["codex", "codebuddy"], default="codex",
+                     help="Harness to check (default: codex)")
 
     scl = ps.add_parser("clean", help="Remove all Illuminate-synced artifacts from a repository")
     scl.add_argument("--repo", required=True, help="Target repository path")
+    scl.add_argument("--harness", choices=["codex", "codebuddy"], default="codex",
+                     help="Harness to clean (default: codex)")
 
     # knowledge pull / status / push
     p = sub.add_parser("knowledge", help="Knowledge store operations")
@@ -417,9 +429,58 @@ def _cmd_sync_codex(args):
     return 0
 
 
+def _cmd_sync_codebuddy(args):
+    pack_dir = Path(args.pack).resolve()
+    repo = Path(args.repo).resolve()
+
+    if not pack_dir.exists():
+        print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
+        return 1
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+
+    try:
+        result = sync_codebuddy(pack_dir, repo, skill_filter=args.skill)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"CodeBuddy sync: COMPLETE", file=sys.stderr)
+    print(f"  Pack:     {result['pack_id']} v{result['pack_version']}", file=sys.stderr)
+    print(f"  Skills:   {', '.join(result['exposed_skills'])}", file=sys.stderr)
+    print(f"  Rules:    {result['rules_copied']} files", file=sys.stderr)
+    print(f"  Skills:   {result['skills_copied']} synced", file=sys.stderr)
+    print(f"  Commands: {result['commands_copied']} synced", file=sys.stderr)
+    print(f"  CODEBUDDY:{' modified' if result['codebuddy_modified'] else ' no change'}", file=sys.stderr)
+    return 0
+
+
 def _cmd_sync_check(args):
     pack_dir = Path(args.pack).resolve()
     repo = Path(args.repo).resolve()
+
+    if not pack_dir.exists():
+        print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
+        return 1
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+
+    if getattr(args, 'harness', 'codex') == 'codebuddy':
+        ok, issues = check_codebuddy_sync(pack_dir, repo)
+        label = "CodeBuddy"
+    else:
+        ok, issues = check_codex_sync(pack_dir, repo)
+        label = "Codex"
+
+    if ok:
+        print(f"Sync check ({label}): PASSED", file=sys.stderr)
+        return 0
+    print(f"Sync check ({label}): FAILED", file=sys.stderr)
+    for issue in issues:
+        print(f"  - {issue}", file=sys.stderr)
+    return 1
 
     if not pack_dir.exists():
         print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
@@ -444,14 +505,20 @@ def _cmd_sync_clean(args):
         print(f"Error: repository not found: {repo}", file=sys.stderr)
         return 1
 
-    result = clean_sync(repo)
+    if getattr(args, 'harness', 'codex') == 'codebuddy':
+        result = clean_codebuddy_sync(repo)
+        label = "CodeBuddy"
+    else:
+        result = clean_codex_sync(repo)
+        label = "Codex"
+
     removed = result.get("removed_artifacts", [])
     if removed:
-        print("Clean: COMPLETE", file=sys.stderr)
+        print(f"Clean ({label}): COMPLETE", file=sys.stderr)
         for item in removed:
             print(f"  Removed: {item}", file=sys.stderr)
     else:
-        print("Clean: nothing to remove", file=sys.stderr)
+        print(f"Clean ({label}): nothing to remove", file=sys.stderr)
     return 0
 
 
@@ -558,6 +625,7 @@ _DISPATCH = {
     ("compat", "generate"): _cmd_compat_generate,
     ("compat", "check"): _cmd_compat_check,
     ("sync", "codex"): _cmd_sync_codex,
+    ("sync", "codebuddy"): _cmd_sync_codebuddy,
     ("sync", "check"): _cmd_sync_check,
     ("sync", "clean"): _cmd_sync_clean,
     ("knowledge", "pull"): _cmd_knowledge_pull,
