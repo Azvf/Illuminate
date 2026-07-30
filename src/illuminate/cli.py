@@ -482,22 +482,6 @@ def _cmd_sync_check(args):
         print(f"  - {issue}", file=sys.stderr)
     return 1
 
-    if not pack_dir.exists():
-        print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
-        return 1
-    if not repo.exists():
-        print(f"Error: repository not found: {repo}", file=sys.stderr)
-        return 1
-
-    ok, issues = check_sync(pack_dir, repo)
-    if ok:
-        print("Sync check: PASSED", file=sys.stderr)
-        return 0
-    print("Sync check: FAILED", file=sys.stderr)
-    for issue in issues:
-        print(f"  - {issue}", file=sys.stderr)
-    return 1
-
 
 def _cmd_sync_clean(args):
     repo = Path(args.repo).resolve()
