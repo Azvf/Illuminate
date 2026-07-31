@@ -173,6 +173,36 @@ class TestSyncCodex(unittest.TestCase):
         self.assertNotIn("perf-profile", dirs,
                          "Stale skills should be removed on re-sync")
 
+    def test_sync_preserves_project_owned_skills(self):
+        """Lock-based ownership: a project-owned skill under .agents/skills/
+        must survive first sync (regression guard for the old full-dir wipe)."""
+        repo = self._make_repo()
+        project_skill = repo / ".agents" / "skills" / "my-own-skill"
+        project_skill.mkdir(parents=True)
+        (project_skill / "SKILL.md").write_text("# project skill", encoding="utf-8")
+
+        sync_codex(CORE_PACK, repo)
+
+        self.assertTrue(
+            (repo / ".agents" / "skills" / "my-own-skill" / "SKILL.md").exists(),
+            "Project-owned skill must not be deleted on first sync",
+        )
+
+    def test_clean_preserves_project_owned_skills(self):
+        """clean_sync must only remove lock-managed skills."""
+        repo = self._make_repo()
+        project_skill = repo / ".agents" / "skills" / "my-own-skill"
+        project_skill.mkdir(parents=True)
+        (project_skill / "SKILL.md").write_text("# project skill", encoding="utf-8")
+
+        sync_codex(CORE_PACK, repo)
+        clean_sync(repo)
+
+        self.assertTrue(
+            (repo / ".agents" / "skills" / "my-own-skill" / "SKILL.md").exists(),
+            "clean_sync must not delete project-owned skills",
+        )
+
     # ── Check ──
 
     def test_check_passes_after_sync(self):

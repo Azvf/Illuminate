@@ -96,18 +96,23 @@ def _sync_skills(
     manifest: dict,
     exposed: Set[str],
 ) -> Dict[str, List[str]]:
-    """Atomically sync selected skills into repo_root/.agents/skills/.
+    """Sync selected skills into repo_root/.agents/skills/.
+
+    Only skills recorded in the previous codex-lock are treated as
+    Illuminate-managed; project-owned skill directories under
+    .agents/skills/ are preserved. This matches the ownership model used by
+    the CodeBuddy sync adapter.
 
     Returns {skill_name: [copied_file_rel_paths]}.
     """
     target_dir = repo_root / ".agents" / "skills"
-    temp_dir = repo_root / ".agents" / ".skills.tmp"
+    target_dir.mkdir(parents=True, exist_ok=True)
 
-    # Clean temp
-    if temp_dir.exists():
-        shutil.rmtree(temp_dir)
+    lock = load_codex_lock(repo_root)
+    managed_names = {e["name"] for e in lock.get("skills", [])} if lock else set()
 
     copied: Dict[str, List[str]] = {}
+    synced_names = set()
 
     for entry in manifest.get("skills", []):
         if entry["id"] not in exposed:
@@ -118,7 +123,12 @@ def _sync_skills(
             continue
 
         skill_name = entry["dir"].split("/")[-1]
-        dest_dir = temp_dir / skill_name
+        synced_names.add(skill_name)
+        dest_dir = target_dir / skill_name
+
+        # Clean only if previously managed (handles removed content)
+        if skill_name in managed_names and dest_dir.exists():
+            shutil.rmtree(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         skill_files: List[str] = []
@@ -133,11 +143,12 @@ def _sync_skills(
 
         copied[skill_name] = skill_files
 
-    # Atomic replace
-    if target_dir.exists():
-        shutil.rmtree(target_dir)
-    if temp_dir.exists():
-        temp_dir.rename(target_dir)
+    # Remove stale managed skills no longer exposed
+    for name in managed_names:
+        if name not in synced_names:
+            stale_dir = target_dir / name
+            if stale_dir.exists():
+                shutil.rmtree(stale_dir)
 
     return copied
 
@@ -286,7 +297,7 @@ def sync_codex(
     new_content, agents_modified = merge_agents_block(agents_path, block_text)
     agents_path.write_text(new_content, encoding="utf-8")
 
-    # 4. Sync .agents/skills/ (atomic)
+    # 4. Sync .agents/skills/ (lock-owned; project-owned skills preserved)
     skill_files = _sync_skills(pack_dir, repo_root, manifest, exposed)
 
     # 5. Generate agents/openai.yaml for each exposed skill
@@ -306,19 +317,6 @@ def sync_codex(
     # 6. Generate lock
     lock = _create_codex_lock(repo_root, pack_dir, manifest, exposed, skill_files)
 
-    # 7. Clean stale skills
-    stale = []
-    agents_skills_dir = repo_root / ".agents" / "skills"
-    if agents_skills_dir.exists():
-        exposed_names = set()
-        for entry in manifest.get("skills", []):
-            if entry["id"] in exposed:
-                exposed_names.add(entry["dir"].split("/")[-1])
-        for d in agents_skills_dir.iterdir():
-            if d.is_dir() and d.name not in exposed_names:
-                shutil.rmtree(d)
-                stale.append(d.name)
-
     return {
         "pack_id": manifest.get("id", "?"),
         "pack_version": manifest.get("version", "?"),
@@ -326,7 +324,6 @@ def sync_codex(
         "skill_count": len(exposed),
         "agents_modified": agents_modified,
         "files_copied": sum(len(f) for f in skill_files.values()),
-        "stale_skills_removed": stale,
     }
 
 
@@ -422,9 +419,17 @@ def clean_sync(repo_root: Path) -> dict:
             agents_path.write_text(new_content, encoding="utf-8")
             removed.append("AGENTS.md illuminate block")
 
-    # Remove .agents/skills/
+    # Remove managed skills (only those recorded in the lock)
+    lock = load_codex_lock(repo_root)
     skills_dir = repo_root / ".agents" / "skills"
-    if skills_dir.exists():
+    for skill_entry in (lock or {}).get("skills", []):
+        skill_path = skills_dir / skill_entry["name"]
+        if skill_path.exists():
+            shutil.rmtree(skill_path)
+            removed.append(f".agents/skills/{skill_entry['name']}")
+
+    # Remove .agents/skills/ if empty
+    if skills_dir.exists() and not any(skills_dir.iterdir()):
         shutil.rmtree(skills_dir)
         removed.append(".agents/skills/")
 
