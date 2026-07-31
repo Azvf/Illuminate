@@ -41,7 +41,7 @@
       "illuminate.layer-debug",
       "illuminate.perf-profile"
     ],
-    "conflicts": []
+    "activation_conflicts": []
   },
 
   "outputs": [

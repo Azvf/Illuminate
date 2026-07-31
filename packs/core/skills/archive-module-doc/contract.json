@@ -51,7 +51,7 @@
     "recommended_next": [
       "illuminate.tidy-doc"
     ],
-    "conflicts": []
+    "activation_conflicts": []
   },
 
   "project_context": {

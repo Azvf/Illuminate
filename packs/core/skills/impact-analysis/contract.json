@@ -45,7 +45,7 @@
 
   "relations": {
     "recommended_next": [],
-    "conflicts": []
+    "activation_conflicts": []
   },
 
   "outputs": [

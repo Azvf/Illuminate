@@ -54,7 +54,7 @@
       "illuminate.archive-module-doc",
       "illuminate.tidy-doc"
     ],
-    "conflicts": []
+    "activation_conflicts": []
   },
 
   "project_context": {

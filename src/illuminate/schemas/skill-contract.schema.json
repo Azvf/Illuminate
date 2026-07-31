@@ -68,7 +68,7 @@
       "properties": {
         "recommended_previous": { "type": "array", "items": { "type": "string" } },
         "recommended_next": { "type": "array", "items": { "type": "string" } },
-        "conflicts": { "type": "array", "items": { "type": "string" } }
+        "activation_conflicts": { "type": "array", "items": { "type": "string" } }
       }
     },
 

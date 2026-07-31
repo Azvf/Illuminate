@@ -91,7 +91,7 @@ def _logical_resolved(skill_filter=None):
 
 class TestAdapterConsistency(unittest.TestCase):
 
-    def assert_consistent(self, skill_filter=None):
+    def assert_exposed_consistent(self, skill_filter=None):
         expected = _exposed_via_mount(skill_filter)
         for adapter in ADAPTERS[1:]:
             actual = adapter(skill_filter)
@@ -101,19 +101,24 @@ class TestAdapterConsistency(unittest.TestCase):
             )
 
     def test_default_exposed_set_consistent(self):
-        self.assert_consistent(None)
+        self.assert_exposed_consistent(None)
 
     def test_single_skill_filter_consistent(self):
-        self.assert_consistent(["illuminate.layer-debug"])
+        self.assert_exposed_consistent(["illuminate.layer-debug"])
 
     def test_alias_filter_consistent(self):
-        self.assert_consistent(["illuminate.grill-me"])
+        self.assert_exposed_consistent(["illuminate.grill-me"])
 
-    def test_conflict_raises_everywhere(self):
-        for adapter in ADAPTERS:
-            with self.assertRaises(ValueError) as ctx:
-                adapter(["illuminate.layer-debug", "illuminate.perf-profile"])
-            self.assertIn("not recommended with", str(ctx.exception))
+    def test_activation_conflicting_skills_coexist_everywhere(self):
+        """activation_conflicts does not block exposure on any adapter."""
+        expected = _exposed_via_mount(
+            ["illuminate.layer-debug", "illuminate.perf-profile"]
+        )
+        self.assertIn("illuminate.layer-debug", expected)
+        self.assertIn("illuminate.perf-profile", expected)
+        self.assert_exposed_consistent(
+            ["illuminate.layer-debug", "illuminate.perf-profile"]
+        )
 
     def test_unknown_skill_raises_everywhere(self):
         for adapter in ADAPTERS:

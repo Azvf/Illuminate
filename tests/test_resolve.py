@@ -83,13 +83,16 @@ class TestResolve(unittest.TestCase):
             )
         self.assertIn("Unknown skill ID", str(ctx.exception))
 
-    def test_conflicting_skills_raises(self):
-        with self.assertRaises(ValueError) as ctx:
-            create_mount_plan(
-                CORE_PACK, "/test/repo",
-                skill_filter=["illuminate.layer-debug", "illuminate.perf-profile"],
-            )
-        self.assertIn("not recommended with", str(ctx.exception))
+    def test_activation_conflicting_skills_can_be_exposed(self):
+        """activation_conflicts is activation-level metadata: both skills
+        may still be exposed in the same mount."""
+        plan = create_mount_plan(
+            CORE_PACK, "/test/repo",
+            skill_filter=["illuminate.layer-debug", "illuminate.perf-profile"],
+        )
+        exposed = plan["skills"]["exposed"]
+        self.assertIn("illuminate.layer-debug", exposed)
+        self.assertIn("illuminate.perf-profile", exposed)
 
     def test_alias_resolved_in_filter(self):
         # grill-me is an alias for grilling

@@ -97,19 +97,7 @@ def resolve_exposed_skills(
         resolved.append(current)
 
     # Deduplicate (multiple aliases may resolve to same target)
-    exposed = list(dict.fromkeys(resolved))
-
-    # Check conflicts (only when explicitly filtered)
-    exposed_set = set(exposed)
-    for contract in contracts:
-        if contract["id"] in exposed_set:
-            for conflict in contract.get("relations", {}).get("conflicts", []):
-                if conflict in exposed_set:
-                    raise ValueError(
-                        f"Skill '{contract['id']}' not recommended with '{conflict}' — "
-                        "cannot expose both in same mount"
-                    )
-    return exposed
+    return list(dict.fromkeys(resolved))
 
 
 def create_mount_plan(
@@ -129,8 +117,7 @@ def create_mount_plan(
             Aliases are resolved to their targets.
 
     Raises:
-        ValueError: If skill_filter contains unknown IDs or conflicting
-                    skills are selected together.
+        ValueError: If skill_filter contains unknown IDs or alias cycles.
     """
     manifest = load_pack_manifest(pack_dir)
     policy_index = load_policy_index(pack_dir, manifest)
