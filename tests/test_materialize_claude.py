@@ -113,17 +113,25 @@ class TestMaterializeClaude(unittest.TestCase):
         self.assertGreater(len(lock["files"]), 0)
 
     def test_lock_contains_declared_permissions(self):
-        """Lock file should record declared and enforced permissions separately."""
+        """Lock file should record declared, enforced, and unsupported
+        permissions separately (the three-layer permission model)."""
         info = materialize_session(CORE_PACK, str(self.tmpdir))
         lock = info["lock"]
         self.assertIn("declared_permissions", lock)
         self.assertIn("enforced_permissions", lock)
+        self.assertIn("unsupported_permissions", lock)
         self.assertIn("enforcement_status", lock)
         self.assertIn("exposed_skills", lock)
         dp = lock["declared_permissions"]
         self.assertIn("read", dp)
         self.assertIn("write", dp)
         self.assertIn("execute", dp)
+        # read/write are declared but not enforced by claude-settings
+        up = lock["unsupported_permissions"]
+        self.assertIn("read", up)
+        self.assertIn("write", up)
+        self.assertEqual(up["read"], dp["read"])
+        self.assertEqual(up["write"], dp["write"])
 
     def test_lock_verifiable(self):
         info = materialize_session(CORE_PACK, str(self.tmpdir))

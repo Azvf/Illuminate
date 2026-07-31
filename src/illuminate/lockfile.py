@@ -52,6 +52,9 @@ def create_lock(
     if permission_info:
         lock["declared_permissions"] = dict(permission_info.get("declared_permissions", {}))
         lock["enforced_permissions"] = dict(permission_info.get("enforced_permissions", {}))
+        lock["unsupported_permissions"] = dict(
+            permission_info.get("unsupported_permissions", {})
+        )
         lock["enforcement_status"] = dict(permission_info.get("enforcement_status", {}))
         lock["exposed_skills"] = list(permission_info.get("exposed_skills", []))
         lock["file_count"] = len(files)
