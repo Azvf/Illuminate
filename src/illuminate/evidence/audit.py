@@ -30,16 +30,37 @@ import argparse
 import json
 import sys
 from datetime import datetime, timezone
+from importlib import metadata as importlib_metadata
 from pathlib import Path
+from typing import Optional
 
 from .diff_provider import collect as collect_diff
 from .patterns_provider import collect as collect_patterns
 from .imports_provider import collect as collect_imports
 from .gitutil import get_head_commit
 
-_TOOL_VERSION = "0.1.0"
-_PACK_ID = "illuminate.core"
-_PACK_VERSION = "0.1.0"
+
+def _tool_version() -> str:
+    """Read the tool version from installed package metadata."""
+    try:
+        return importlib_metadata.version("illuminate-harness")
+    except Exception:
+        return "unknown"
+
+
+def _pack_identity(pack_dir: Optional[Path]):
+    """Read pack id/version from the current pack.json, if available."""
+    if pack_dir is None:
+        return ("unknown", "unknown")
+    pack_json = Path(pack_dir) / "pack.json"
+    if not pack_json.exists():
+        return ("unknown", "unknown")
+    try:
+        with open(pack_json, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return (data.get("id", "unknown"), data.get("version", "unknown"))
+    except Exception:
+        return ("unknown", "unknown")
 
 
 def _default_output_path(repo_root):
@@ -47,8 +68,12 @@ def _default_output_path(repo_root):
 
 
 def run_audit(repo_root, output_path=None, pretty=False,
-              quiet=False, pack_lock_hash=None):
+              quiet=False, pack_lock_hash=None, pack_dir=None):
     """Run the evidence audit and write results to output_path.
+
+    Args:
+        pack_dir: Optional path to a pack whose pack.json supplies the
+                  pack identity in the report.
 
     Returns the evidence dict.
     """
@@ -80,16 +105,18 @@ def run_audit(repo_root, output_path=None, pretty=False,
 
     head_commit = get_head_commit(repo_root)
 
+    pack_id, pack_version = _pack_identity(pack_dir)
+
     evidence = {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tool": {
             "name": "illuminate",
-            "version": _TOOL_VERSION,
+            "version": _tool_version(),
         },
         "pack": {
-            "id": _PACK_ID,
-            "version": _PACK_VERSION,
+            "id": pack_id,
+            "version": pack_version,
             "lock_hash": pack_lock_hash or "unknown",
         },
         "baseline": {
