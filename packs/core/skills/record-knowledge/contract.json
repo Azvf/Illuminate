@@ -5,7 +5,7 @@
   "entry": "SKILL.md",
 
   "activation": {
-    "mode": "explicit-preferred",
+    "mode": "explicit",
     "include_tags": [
       "knowledge.record",
       "convention.record",
@@ -54,7 +54,7 @@
       "illuminate.archive-module-doc",
       "illuminate.tidy-doc"
     ],
-    "not_recommended_with": []
+    "conflicts": []
   },
 
   "project_context": {

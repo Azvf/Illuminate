@@ -5,7 +5,7 @@
   "entry": "SKILL.md",
 
   "activation": {
-    "mode": "explicit-preferred",
+    "mode": "explicit",
     "include_tags": [
       "module-doc.archive",
       "module-doc.split",
@@ -50,7 +50,8 @@
     ],
     "recommended_next": [
       "illuminate.tidy-doc"
-    ]
+    ],
+    "conflicts": []
   },
 
   "project_context": {

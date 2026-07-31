@@ -43,7 +43,7 @@
       "illuminate.layer-debug",
       "illuminate.impact-analysis"
     ],
-    "conflicts_with": []
+    "conflicts": []
   },
 
   "outputs": [

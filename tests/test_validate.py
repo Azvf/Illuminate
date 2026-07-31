@@ -70,5 +70,50 @@ class TestPackValidation(unittest.TestCase):
             self.assertTrue(path.exists(), f"Policy file not found: {policy['path']}")
 
 
+class TestContractSchema(unittest.TestCase):
+    """Contracts must conform to schemas/skill-contract.schema.json."""
+
+    def _load_contract_schema(self):
+        schema = json.loads(
+            (REPO_ROOT / "schemas" / "skill-contract.schema.json").read_text(encoding="utf-8")
+        )
+        return schema
+
+    def _load_contracts(self):
+        from illuminate.manifest import load_pack_manifest, load_skill_contracts
+        manifest = load_pack_manifest(CORE_PACK)
+        return load_skill_contracts(CORE_PACK, manifest)
+
+    def test_all_contracts_pass_schema(self):
+        from illuminate.jsonschema import validate as validate_schema
+        schema = self._load_contract_schema()
+        for contract in self._load_contracts():
+            errors = validate_schema(contract, schema)
+            self.assertEqual(
+                errors, [],
+                f"Contract {contract['id']} fails schema: {errors}",
+            )
+
+    def test_schema_rejects_unknown_activation_mode(self):
+        from illuminate.jsonschema import validate as validate_schema
+        schema = self._load_contract_schema()
+        contract = self._load_contracts()[0]
+        contract["activation"]["mode"] = "sometimes"
+        errors = validate_schema(contract, schema)
+        self.assertTrue(any("enum" in e for e in errors), errors)
+
+    def test_schema_rejects_legacy_relation_field(self):
+        """Legacy conflicts_with / not_recommended_with must not return."""
+        from illuminate.jsonschema import validate as validate_schema
+        schema = self._load_contract_schema()
+        contract = self._load_contracts()[0]
+        contract["relations"]["not_recommended_with"] = []
+        errors = validate_schema(contract, schema)
+        self.assertTrue(
+            any("additional property" in e for e in errors),
+            f"Legacy relation field not rejected: {errors}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

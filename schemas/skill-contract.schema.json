@@ -26,8 +26,9 @@
     "activation": {
       "type": "object",
       "required": ["mode"],
+      "additionalProperties": false,
       "properties": {
-        "mode": { "type": "string", "enum": ["auto", "manual"] },
+        "mode": { "type": "string", "enum": ["auto", "explicit", "manual"] },
         "include_tags": { "type": "array", "items": { "type": "string" } },
         "exclude_tags": { "type": "array", "items": { "type": "string" } }
       }
@@ -63,9 +64,11 @@
 
     "relations": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
+        "recommended_previous": { "type": "array", "items": { "type": "string" } },
         "recommended_next": { "type": "array", "items": { "type": "string" } },
-        "conflicts_with": { "type": "array", "items": { "type": "string" } }
+        "conflicts": { "type": "array", "items": { "type": "string" } }
       }
     },
 

@@ -22,7 +22,7 @@
 
   "relations": {
     "recommended_next": [],
-    "conflicts_with": []
+    "conflicts": []
   },
 
   "outputs": []

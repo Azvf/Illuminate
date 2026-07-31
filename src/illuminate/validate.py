@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import List, Tuple
 
+from .jsonschema import validate as validate_schema
 from .manifest import (
     load_pack_manifest,
     load_policy_index,
@@ -19,6 +20,47 @@ class ValidationError(Exception):
     pass
 
 
+def _schema_dir() -> Path:
+    """Locate the schemas/ directory shipped with the repository.
+
+    Works for both a source checkout (src layout) and an editable install.
+    Returns an empty path if schemas are not available (e.g. a packaged
+    install without package data); schema checks are skipped then.
+    """
+    candidate = Path(__file__).resolve().parents[2] / "schemas"
+    if candidate.is_dir():
+        return candidate
+    return Path()
+
+
+def _load_schema(name: str):
+    """Load a JSON Schema file, returning None if unavailable."""
+    schema_path = _schema_dir() / name
+    if not schema_path.exists():
+        return None
+    with open(schema_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _validate_against_schemas(pack_dir: Path, manifest: dict,
+                              contracts: list, errors: List[str]) -> None:
+    """Validate pack.json and every contract.json against the JSON Schemas."""
+    pack_schema = _load_schema("pack.schema.json")
+    if pack_schema is not None:
+        schema_errors = validate_schema(manifest, pack_schema)
+        for err in schema_errors:
+            errors.append(f"[{manifest.get('id', '<unknown>')}] pack.json: {err}")
+
+    contract_schema = _load_schema("skill-contract.schema.json")
+    if contract_schema is None:
+        return
+    for contract in contracts:
+        cid = contract.get("id", "<unknown>")
+        schema_errors = validate_schema(contract, contract_schema)
+        for err in schema_errors:
+            errors.append(f"[{cid}] contract.json: {err}")
+
+
 def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
     """Validate a pack directory. Returns (ok, errors)."""
     errors: List[str] = []
@@ -30,6 +72,14 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
         return False, [str(e)]
 
     pack_id = manifest.get("id", "<unknown>")
+
+    # 1b. Load contracts and validate manifest + contracts against JSON Schemas
+    try:
+        contracts = load_skill_contracts(pack_dir, manifest)
+    except Exception as e:
+        errors.append(str(e))
+        contracts = []
+    _validate_against_schemas(pack_dir, manifest, contracts, errors)
 
     # 2. Check required manifest fields
     for field in ("schema_version", "id", "version", "name", "skills"):
@@ -64,13 +114,7 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
         if not skill_md.exists():
             errors.append(f"[{pack_id}] SKILL.md not found for skill '{sid}'")
 
-    # 4. Load and validate contracts
-    try:
-        contracts = load_skill_contracts(pack_dir, manifest)
-    except Exception as e:
-        errors.append(str(e))
-        contracts = []
-
+    # 4. Validate contracts (loaded in step 1b)
     contract_ids = []
     for contract in contracts:
         cid = contract.get("id", "")
@@ -80,32 +124,31 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
         if contract_ids.count(cid) > 1:
             errors.append(f"[{pack_id}] duplicate contract id: {cid}")
 
-        # Check recommended_next references exist
-        for ref in contract.get("relations", {}).get("recommended_next", []):
-            if ref not in skill_ids:
-                errors.append(
-                    f"[{pack_id}] skill '{cid}' recommended_next references unknown skill: {ref}"
-                )
-
-        # Check not_recommended_with references exist
-        for ref in contract.get("relations", {}).get("not_recommended_with", []):
-            if ref not in skill_ids:
-                errors.append(
-                    f"[{pack_id}] skill '{cid}' not_recommended_with references unknown skill: {ref}"
-                )
-
-        # Check not_recommended_with is bidirectional
-        for ref in contract.get("relations", {}).get("not_recommended_with", []):
-            ref_contract = next((c for c in contracts if c.get("id") == ref), None)
-            if ref_contract:
-                if cid not in ref_contract.get("relations", {}).get("not_recommended_with", []):
+        # Check relation references exist
+        relations = contract.get("relations", {})
+        for rel_name in ("recommended_previous", "recommended_next", "conflicts"):
+            for ref in relations.get(rel_name, []):
+                if ref not in skill_ids:
                     errors.append(
-                        f"[{pack_id}] not_recommended_with not bidirectional: '{cid}' -> '{ref}' but not back"
+                        f"[{pack_id}] skill '{cid}' {rel_name} references unknown skill: {ref}"
                     )
 
-        # Check alias doesn't form a cycle
+        # Check conflicts is bidirectional
+        for ref in relations.get("conflicts", []):
+            ref_contract = next((c for c in contracts if c.get("id") == ref), None)
+            if ref_contract:
+                if cid not in ref_contract.get("relations", {}).get("conflicts", []):
+                    errors.append(
+                        f"[{pack_id}] conflicts not bidirectional: '{cid}' -> '{ref}' but not back"
+                    )
+
+        # Check alias target exists and doesn't form a cycle
         if contract.get("kind") == "alias":
             target = contract.get("target", "")
+            if target and target not in skill_ids:
+                errors.append(
+                    f"[{pack_id}] alias '{cid}' targets unknown skill: {target}"
+                )
             if target:
                 visited = {cid}
                 current = target
