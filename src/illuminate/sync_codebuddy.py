@@ -373,6 +373,7 @@ def _load_lock(repo_root: Path) -> dict:
 
 
 def _write_lock(
+    pack_dir: Path,
     repo_root: Path,
     manifest: dict,
     exposed: Set[str],
@@ -385,7 +386,7 @@ def _write_lock(
     lock_dir = repo_root / _LOCK_DIR
     lock_dir.mkdir(parents=True, exist_ok=True)
 
-    pack_hash = hash_directory(Path(manifest.get("_pack_dir", str(repo_root))))
+    pack_hash = hash_directory(pack_dir)
 
     skill_entries = []
     for skill_name, file_hashes in skill_hashes.items():
@@ -473,7 +474,7 @@ def sync_codebuddy(
 
     # 7. Write lock
     lock = _write_lock(
-        repo_root, manifest, exposed,
+        pack_dir, repo_root, manifest, exposed,
         rule_hashes, skill_hashes, command_hashes,
         codebuddy_hash,
     )
