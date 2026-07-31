@@ -9,19 +9,26 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install illuminate
         run: pip install -e .
 
-      - name: Validate core pack
+      - name: Validate core pack (incl. contract schema conformance)
         run: illuminate pack validate packs/core
+
+      - name: Contract schema consistency tests
+        run: python -m unittest tests.test_validate -v
 
       - name: Run tests
         run: python -m unittest discover tests -v
