@@ -99,6 +99,8 @@ def _build_parser():
     ps = p.add_subparsers(dest="evidence_command")
     a = ps.add_parser("audit", help="Run evidence audit on a repository")
     a.add_argument("--repo", default=".", help="Repository root path")
+    a.add_argument("--pack", default=None,
+                   help="Pack directory to bind the report's pack identity to")
     a.add_argument("--output", "-o", default=None, help="Output file path")
     a.add_argument("--pretty", action="store_true", help="Pretty-print JSON")
     a.add_argument("--quiet", action="store_true", help="Suppress summary")
@@ -356,11 +358,18 @@ def _cmd_evidence_audit(args):
     if not repo_root.exists():
         print(f"Error: repository not found: {repo_root}", file=sys.stderr)
         return 1
+    pack_dir = None
+    if args.pack:
+        pack_dir = Path(args.pack).resolve()
+        if not pack_dir.exists():
+            print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
+            return 1
     output_path = Path(args.output) if args.output else None
     try:
         evidence = run_audit(
             repo_root=repo_root, output_path=output_path,
             pretty=args.pretty, quiet=args.quiet,
+            pack_dir=pack_dir,
         )
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

@@ -49,18 +49,23 @@ def _tool_version() -> str:
 
 
 def _pack_identity(pack_dir: Optional[Path]):
-    """Read pack id/version from the current pack.json, if available."""
+    """Read pack id/version from the current pack.json, if available.
+
+    Returns (id, version); both are "unbound" when no pack is supplied,
+    which is a deliberate state (the report is not tied to a pack) rather
+    than a read failure.
+    """
     if pack_dir is None:
-        return ("unknown", "unknown")
+        return ("unbound", "unbound")
     pack_json = Path(pack_dir) / "pack.json"
     if not pack_json.exists():
-        return ("unknown", "unknown")
+        return ("unbound", "unbound")
     try:
         with open(pack_json, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return (data.get("id", "unknown"), data.get("version", "unknown"))
+        return (data.get("id", "unbound"), data.get("version", "unbound"))
     except Exception:
-        return ("unknown", "unknown")
+        return ("unbound", "unbound")
 
 
 def _default_output_path(repo_root):
@@ -115,6 +120,7 @@ def run_audit(repo_root, output_path=None, pretty=False,
             "version": _tool_version(),
         },
         "pack": {
+            "binding": "bound" if pack_dir is not None else "unbound",
             "id": pack_id,
             "version": pack_version,
             "lock_hash": pack_lock_hash or "unknown",
@@ -164,7 +170,10 @@ def _print_summary(evidence, file):
     tool = evidence.get("tool", {})
     pack = evidence.get("pack", {})
     print(f"  Tool:   {tool.get('name', '?')} v{tool.get('version', '?')}", file=file)
-    print(f"  Pack:   {pack.get('id', '?')} v{pack.get('version', '?')}", file=file)
+    if pack.get("binding") == "bound":
+        print(f"  Pack:   {pack.get('id', '?')} v{pack.get('version', '?')}", file=file)
+    else:
+        print(f"  Pack:   unbound (pass --pack to bind)", file=file)
     print(f"  Lock:   {pack.get('lock_hash', '?')}", file=file)
     print(file=file)
 
