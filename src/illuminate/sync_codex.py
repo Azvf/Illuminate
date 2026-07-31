@@ -16,36 +16,16 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from .hashutil import hash_file, hash_directory, lock_hash
+from .managed_block import (
+    BEGIN_MARKER as _BEGIN_MARKER,
+    END_MARKER as _END_MARKER,
+    make_begin_marker,
+    merge_block,
+    remove_block,
+)
 from .manifest import load_pack_manifest, load_policy_index, load_skill_contracts
+from .resolve import resolve_exposed_skills
 from .validate import validate_pack
-
-
-# ---------------------------------------------------------------------------
-# AGENTS.md block markers
-# ---------------------------------------------------------------------------
-
-_BEGIN_MARKER = "<!-- illuminate:begin"
-_END_MARKER = "<!-- illuminate:end -->"
-
-
-def _make_begin_marker(manifest: dict) -> str:
-    pack_id = manifest.get("id", "?")
-    version = manifest.get("version", "?")
-    return f"<!-- illuminate:begin\npack={pack_id}\nversion={version}\n-->"
-
-
-def _block_range(lines: List[str]) -> Optional[Tuple[int, int]]:
-    """Find <!-- illuminate:begin --> ... <!-- illuminate:end --> range.
-
-    Returns (begin_index, end_index) or None if not found.
-    """
-    begin = None
-    for i, line in enumerate(lines):
-        if line.strip().startswith(_BEGIN_MARKER):
-            begin = i
-        if begin is not None and line.strip() == _END_MARKER:
-            return (begin, i)
-    return None
 
 
 def _compile_policy_text(pack_dir: Path, manifest: dict) -> str:
@@ -80,7 +60,7 @@ def _build_agents_block(pack_dir: Path, manifest: dict, exposed: Set[str]) -> st
 
     Only includes policies; skills are discovered by Codex via .agents/skills/.
     """
-    begin = _make_begin_marker(manifest)
+    begin = make_begin_marker(manifest)
     policy_text = _compile_policy_text(pack_dir, manifest)
     exposed_list = ", ".join(sorted(exposed))
     lines = [
@@ -103,29 +83,7 @@ def merge_agents_block(agents_path: Path, block_text: str) -> Tuple[str, bool]:
 
     Returns (new_content, was_modified).
     """
-    if agents_path.exists():
-        original = agents_path.read_text(encoding="utf-8")
-    else:
-        original = ""
-
-    if not original.strip():
-        return block_text + "\n", True
-
-    lines = original.split("\n")
-    existing_range = _block_range(lines)
-
-    if existing_range is None:
-        # Append at end with a blank line separator
-        result = original.rstrip("\n") + "\n\n" + block_text + "\n"
-        return result, True
-
-    begin_idx, end_idx = existing_range
-    before = "\n".join(lines[:begin_idx]).rstrip("\n")
-    after = "\n".join(lines[end_idx + 1:])
-
-    new_lines = [before, "", block_text.strip(), "", after]
-    result = "\n".join(new_lines).strip("\n") + "\n"
-    return result, (result != original)
+    return merge_block(agents_path, block_text)
 
 
 # ---------------------------------------------------------------------------
@@ -319,47 +277,8 @@ def sync_codex(
     manifest = load_pack_manifest(pack_dir)
     contracts = load_skill_contracts(pack_dir, manifest)
 
-    # 2. Resolve exposed skills
-    all_skill_ids = {entry["id"] for entry in manifest.get("skills", [])}
-
-    # Build alias map
-    alias_map = {}
-    for contract in contracts:
-        if contract.get("kind") == "alias":
-            alias_map[contract["id"]] = contract.get("target", "")
-
-    if skill_filter is None:
-        exposed = {
-            c["id"] for c in contracts
-            if c.get("kind", "skill") != "alias"
-        }
-    else:
-        unknown = [sid for sid in skill_filter if sid not in all_skill_ids]
-        if unknown:
-            raise ValueError(
-                f"Unknown skill ID(s) in filter: {', '.join(unknown)}"
-            )
-        resolved = []
-        for sid in skill_filter:
-            current = sid
-            visited = set()
-            while current in alias_map:
-                if current in visited:
-                    raise ValueError(f"Alias cycle detected resolving '{sid}'")
-                visited.add(current)
-                current = alias_map[current]
-            resolved.append(current)
-        exposed = set(resolved)
-
-    # Check not_recommended_with
-    if skill_filter is not None:
-        for contract in contracts:
-            if contract["id"] in exposed:
-                for conflict in contract.get("relations", {}).get("not_recommended_with", []):
-                    if conflict in exposed:
-                        raise ValueError(
-                            f"Skill '{contract['id']}' not recommended with '{conflict}'"
-                        )
+    # 2. Resolve exposed skills via the single shared resolver
+    exposed = set(resolve_exposed_skills(manifest, contracts, skill_filter))
 
     # 3. Merge AGENTS.md
     agents_path = repo_root / "AGENTS.md"
@@ -498,13 +417,8 @@ def clean_sync(repo_root: Path) -> dict:
     agents_path = repo_root / "AGENTS.md"
     if agents_path.exists():
         content = agents_path.read_text(encoding="utf-8")
-        lines = content.split("\n")
-        block_range = _block_range(lines)
-        if block_range:
-            begin_idx, end_idx = block_range
-            before = "\n".join(lines[:begin_idx]).rstrip("\n")
-            after = "\n".join(lines[end_idx + 1:])
-            new_content = (before + "\n" + after).strip("\n") + "\n" if (before or after) else ""
+        new_content = remove_block(content)
+        if new_content != content:
             agents_path.write_text(new_content, encoding="utf-8")
             removed.append("AGENTS.md illuminate block")
 

@@ -93,10 +93,13 @@ def _generate_claude_settings(mount_plan, contracts):
 def _gather_permissions(mount_plan, contracts) -> dict:
     """Aggregate declared and enforced permissions for the mount lock.
 
+    claude-settings can only enforce Bash(execute) rules; read/write
+    permissions are declared in contracts but not compiled into settings.
     Returns a dict with:
-      declared_permissions: All permissions from contracts (read/write/execute)
-      enforced_permissions: What is actually compiled into claude-settings
-      enforcement_status:  Per-category enforcement level
+      declared_permissions:     All permissions from contracts
+      enforced_permissions:     What is compiled into claude-settings
+      unsupported_permissions:  Declared but not enforceable in this harness
+      enforcement_status:       Per-category enforcement level
     """
     exposed = set(mount_plan["skills"]["exposed"])
     allow_exec = set()
@@ -119,6 +122,10 @@ def _gather_permissions(mount_plan, contracts) -> dict:
         },
         "enforced_permissions": {
             "execute": sorted(allow_exec),
+        },
+        "unsupported_permissions": {
+            "read": sorted(allow_read),
+            "write": sorted(allow_write),
         },
         "enforcement_status": {
             "read": "not-enforced",

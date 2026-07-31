@@ -45,6 +45,73 @@ def _resolve_repo(repo: str) -> dict:
     return info
 
 
+def resolve_exposed_skills(
+    manifest: dict,
+    contracts: list,
+    skill_filter: List[str] = None,
+) -> List[str]:
+    """Resolve the set of skill IDs to expose from a filter.
+
+    Single resolution entry point shared by every adapter (session mounts
+    and repository syncs). Handles alias resolution, unknown-ID validation,
+    deduplication, and conflict detection. Returns a list of resolved skill
+    IDs in deterministic order.
+
+    Raises:
+        ValueError: If skill_filter contains unknown IDs, alias cycles, or
+                    conflicting skills are selected together.
+    """
+    # Build alias map
+    alias_map = {}
+    for contract in contracts:
+        if contract.get("kind") == "alias":
+            alias_map[contract["id"]] = contract.get("target", "")
+
+    all_skill_ids = {entry["id"] for entry in manifest.get("skills", [])}
+
+    if skill_filter is None:
+        return [
+            c["id"] for c in contracts
+            if c.get("kind", "skill") != "alias"
+        ]
+
+    # Validate filter IDs exist
+    unknown = [sid for sid in skill_filter if sid not in all_skill_ids]
+    if unknown:
+        raise ValueError(
+            f"Unknown skill ID(s) in filter: {', '.join(unknown)}"
+        )
+
+    # Resolve aliases → targets
+    resolved = []
+    for sid in skill_filter:
+        current = sid
+        visited = set()
+        while current in alias_map:
+            if current in visited:
+                raise ValueError(
+                    f"Alias cycle detected resolving '{sid}'"
+                )
+            visited.add(current)
+            current = alias_map[current]
+        resolved.append(current)
+
+    # Deduplicate (multiple aliases may resolve to same target)
+    exposed = list(dict.fromkeys(resolved))
+
+    # Check conflicts (only when explicitly filtered)
+    exposed_set = set(exposed)
+    for contract in contracts:
+        if contract["id"] in exposed_set:
+            for conflict in contract.get("relations", {}).get("conflicts", []):
+                if conflict in exposed_set:
+                    raise ValueError(
+                        f"Skill '{contract['id']}' not recommended with '{conflict}' — "
+                        "cannot expose both in same mount"
+                    )
+    return exposed
+
+
 def create_mount_plan(
     pack_dir: Path,
     repo: str,
@@ -72,57 +139,8 @@ def create_mount_plan(
     # Resolve repo path + git identity
     repo_info = _resolve_repo(repo)
 
-    # Build alias map
-    alias_map = {}
-    for contract in contracts:
-        if contract.get("kind") == "alias":
-            alias_map[contract["id"]] = contract.get("target", "")
-
-    # All skill IDs defined in manifest
-    all_skill_ids = {entry["id"] for entry in manifest.get("skills", [])}
-
-    # Determine exposed skills
-    if skill_filter is None:
-        exposed = [
-            c["id"] for c in contracts
-            if c.get("kind", "skill") != "alias"
-        ]
-    else:
-        # Validate filter IDs exist
-        unknown = [sid for sid in skill_filter if sid not in all_skill_ids]
-        if unknown:
-            raise ValueError(
-                f"Unknown skill ID(s) in filter: {', '.join(unknown)}"
-            )
-
-        # Resolve aliases → targets
-        resolved = []
-        for sid in skill_filter:
-            current = sid
-            visited = set()
-            while current in alias_map:
-                if current in visited:
-                    raise ValueError(
-                        f"Alias cycle detected resolving '{sid}'"
-                    )
-                visited.add(current)
-                current = alias_map[current]
-            resolved.append(current)
-
-        # Deduplicate (multiple aliases may resolve to same target)
-        exposed = list(dict.fromkeys(resolved))
-
-    # Check not_recommended_with violations (only when explicitly filtered)
-    if skill_filter is not None:
-        exposed_set = set(exposed)
-        for contract in contracts:
-            if contract["id"] in exposed_set:
-                for conflict in contract.get("relations", {}).get("not_recommended_with", []):
-                    if conflict in exposed_set:
-                        raise ValueError(
-                            f"Skill '{contract['id']}' not recommended with '{conflict}' — "
-                            "cannot expose both in same mount"
-                        )
+    # Determine exposed skills via the single shared resolver
+    exposed = resolve_exposed_skills(manifest, contracts, skill_filter)
 
     # Collect policy ids
     policies = sorted(

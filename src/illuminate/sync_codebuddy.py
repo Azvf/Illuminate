@@ -14,10 +14,18 @@ import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Set, Tuple
 
 from .hashutil import hash_file, hash_directory, lock_hash
+from .managed_block import (
+    BEGIN_MARKER as _BEGIN_MARKER,
+    END_MARKER as _END_MARKER,
+    make_begin_marker,
+    merge_block,
+    remove_block,
+)
 from .manifest import load_pack_manifest, load_policy_index, load_skill_contracts
+from .resolve import resolve_exposed_skills
 from .validate import validate_pack
 
 
@@ -29,85 +37,6 @@ _RULES_DIR = ".codebuddy/rules/illuminate"
 _SKILLS_DIR = ".codebuddy/skills"
 _COMMANDS_DIR = ".codebuddy/commands"
 _LOCK_DIR = ".illuminate"
-
-
-# ---------------------------------------------------------------------------
-# CODEBUDDY.md block markers (shared logic from sync_codex)
-# ---------------------------------------------------------------------------
-
-_BEGIN_MARKER = "<!-- illuminate:begin"
-_END_MARKER = "<!-- illuminate:end -->"
-
-
-def _make_begin_marker(manifest: dict) -> str:
-    pack_id = manifest.get("id", "?")
-    version = manifest.get("version", "?")
-    return f"<!-- illuminate:begin\npack={pack_id}\nversion={version}\n-->"
-
-
-def _block_range(lines: List[str]) -> Optional[Tuple[int, int]]:
-    begin = None
-    for i, line in enumerate(lines):
-        if line.strip().startswith(_BEGIN_MARKER):
-            begin = i
-        if begin is not None and line.strip() == _END_MARKER:
-            return (begin, i)
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Alias & conflict resolution (shared logic)
-# ---------------------------------------------------------------------------
-
-def _resolve_exposed_skills(
-    manifest: dict,
-    contracts: list,
-    skill_filter: Optional[List[str]],
-) -> Set[str]:
-    """Resolve exposed skill IDs from filter, expanding aliases.
-
-    Returns a set of resolved skill IDs.
-    """
-    all_skill_ids = {entry["id"] for entry in manifest.get("skills", [])}
-
-    alias_map = {}
-    for c in contracts:
-        if c.get("kind") == "alias":
-            alias_map[c["id"]] = c.get("target", "")
-
-    if skill_filter is None:
-        exposed = {
-            c["id"] for c in contracts
-            if c.get("kind", "skill") != "alias"
-        }
-    else:
-        unknown = [sid for sid in skill_filter if sid not in all_skill_ids]
-        if unknown:
-            raise ValueError(
-                f"Unknown skill ID(s) in filter: {', '.join(unknown)}"
-            )
-        resolved = []
-        for sid in skill_filter:
-            current = sid
-            visited = set()
-            while current in alias_map:
-                if current in visited:
-                    raise ValueError(f"Alias cycle detected resolving '{sid}'")
-                visited.add(current)
-                current = alias_map[current]
-            resolved.append(current)
-        exposed = set(resolved)
-
-    # Check not_recommended_with when explicitly filtered
-    if skill_filter is not None:
-        for c in contracts:
-            if c["id"] in exposed:
-                for conflict in c.get("relations", {}).get("not_recommended_with", []):
-                    if conflict in exposed:
-                        raise ValueError(
-                            f"Skill '{c['id']}' not recommended with '{conflict}'"
-                        )
-    return exposed
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +226,7 @@ def _sync_commands(
 
 def _build_codebuddy_block(manifest: dict, exposed: Set[str]) -> str:
     """Build the Illuminate CODEBUDDY.md block."""
-    begin = _make_begin_marker(manifest)
+    begin = make_begin_marker(manifest)
     exposed_list = ", ".join(sorted(exposed))
     lines = [
         begin,
@@ -326,38 +255,6 @@ def _build_codebuddy_block(manifest: dict, exposed: Set[str]) -> str:
         _END_MARKER,
     ]
     return "\n".join(lines)
-
-
-def _merge_block(file_path: Path, block_text: str) -> Tuple[str, bool]:
-    """Merge an Illuminate block into an existing file.
-
-    If the block markers already exist, only the content between them is replaced.
-    Otherwise, the block is appended at the end.
-
-    Returns (new_content, was_modified).
-    """
-    if file_path.exists():
-        original = file_path.read_text(encoding="utf-8")
-    else:
-        original = ""
-
-    if not original.strip():
-        return block_text + "\n", True
-
-    lines = original.split("\n")
-    existing_range = _block_range(lines)
-
-    if existing_range is None:
-        result = original.rstrip("\n") + "\n\n" + block_text + "\n"
-        return result, True
-
-    begin_idx, end_idx = existing_range
-    before = "\n".join(lines[:begin_idx]).rstrip("\n")
-    after = "\n".join(lines[end_idx + 1:])
-
-    new_lines = [before, "", block_text.strip(), "", after]
-    result = "\n".join(new_lines).strip("\n") + "\n"
-    return result, (result != original)
 
 
 # ---------------------------------------------------------------------------
@@ -452,8 +349,8 @@ def sync_codebuddy(
     manifest = load_pack_manifest(pack_dir)
     contracts = load_skill_contracts(pack_dir, manifest)
 
-    # 2. Resolve exposed skills
-    exposed = _resolve_exposed_skills(manifest, contracts, skill_filter)
+    # 2. Resolve exposed skills via the single shared resolver
+    exposed = set(resolve_exposed_skills(manifest, contracts, skill_filter))
 
     # 3. Sync rules
     rule_hashes = _sync_rules(pack_dir, repo_root, manifest)
@@ -468,7 +365,7 @@ def sync_codebuddy(
     codebuddy_path = repo_root / ".codebuddy" / "CODEBUDDY.md"
     codebuddy_path.parent.mkdir(parents=True, exist_ok=True)
     block_text = _build_codebuddy_block(manifest, exposed)
-    new_content, modified = _merge_block(codebuddy_path, block_text)
+    new_content, modified = merge_block(codebuddy_path, block_text)
     codebuddy_path.write_text(new_content, encoding="utf-8")
     codebuddy_hash = hash_file(codebuddy_path)
 
@@ -596,13 +493,8 @@ def clean_sync(repo_root: Path) -> dict:
     codebuddy_path = repo_root / ".codebuddy" / "CODEBUDDY.md"
     if codebuddy_path.exists():
         content = codebuddy_path.read_text(encoding="utf-8")
-        lines = content.split("\n")
-        block_range = _block_range(lines)
-        if block_range:
-            begin_idx, end_idx = block_range
-            before = "\n".join(lines[:begin_idx]).rstrip("\n")
-            after = "\n".join(lines[end_idx + 1:])
-            new_content = (before + "\n" + after).strip("\n") + "\n" if (before or after) else ""
+        new_content = remove_block(content)
+        if new_content != content:
             codebuddy_path.write_text(new_content, encoding="utf-8")
             removed.append("CODEBUDDY.md illuminate block")
 

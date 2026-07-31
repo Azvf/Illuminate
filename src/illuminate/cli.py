@@ -29,6 +29,7 @@ from . import __version__
 from .validate import validate_pack
 from .inspect_repo import inspect_repo, print_inspect_report
 from .materialize_claude import materialize_session, launch_session
+from .materialize_codex import materialize_codex_session, launch_codex_session
 from .evidence.audit import run_audit
 from .lockfile import load_lock, verify_lock
 from .compat import compat_generate, compat_check
@@ -365,7 +366,7 @@ def _cmd_evidence_audit(args):
         print(f"Error: {e}", file=sys.stderr)
         return 1
     errors = evidence.get("errors", [])
-    if len(errors) == 3:
+    if errors:
         return 1
     return 0
 

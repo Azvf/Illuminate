@@ -73,13 +73,6 @@ def create_lock(
 
     return lock
 
-    lock_path = session_dir / "mount-lock.json"
-    with open(lock_path, "w", encoding="utf-8") as f:
-        json.dump(lock, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-
-    return lock
-
 
 def load_lock(session_dir: Path) -> dict:
     """Load an existing mount-lock.json."""
