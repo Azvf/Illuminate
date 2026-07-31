@@ -2,6 +2,7 @@
 
 import json
 import re
+from importlib.resources import files
 from pathlib import Path
 from typing import List, Tuple
 
@@ -20,39 +21,43 @@ class ValidationError(Exception):
     pass
 
 
-def _schema_dir() -> Path:
-    """Locate the schemas/ directory shipped with the repository.
-
-    Works for both a source checkout (src layout) and an editable install.
-    Returns an empty path if schemas are not available (e.g. a packaged
-    install without package data); schema checks are skipped then.
-    """
-    candidate = Path(__file__).resolve().parents[2] / "schemas"
-    if candidate.is_dir():
-        return candidate
-    return Path()
-
-
 def _load_schema(name: str):
-    """Load a JSON Schema file, returning None if unavailable."""
-    schema_path = _schema_dir() / name
-    if not schema_path.exists():
+    """Load a JSON Schema bundled with the package, or None if unavailable.
+
+    Schemas live inside the installed package (src/illuminate/schemas/) so
+    schema conformance works identically in a source checkout, an editable
+    install, and a built wheel.
+    """
+    try:
+        data = files("illuminate.schemas").joinpath(name).read_text(encoding="utf-8")
+        return json.loads(data)
+    except Exception:
         return None
-    with open(schema_path, "r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 def _validate_against_schemas(pack_dir: Path, manifest: dict,
                               contracts: list, errors: List[str]) -> None:
-    """Validate pack.json and every contract.json against the JSON Schemas."""
+    """Validate pack.json and every contract.json against the JSON Schemas.
+
+    A missing schema resource is a packaging error, not a skip condition:
+    it is reported explicitly so a broken wheel cannot silently disable
+    schema conformance.
+    """
+    pack_id = manifest.get("id", "<unknown>")
+
     pack_schema = _load_schema("pack.schema.json")
-    if pack_schema is not None:
+    if pack_schema is None:
+        errors.append(f"[{pack_id}] schema resource unavailable: pack.schema.json")
+    else:
         schema_errors = validate_schema(manifest, pack_schema)
         for err in schema_errors:
-            errors.append(f"[{manifest.get('id', '<unknown>')}] pack.json: {err}")
+            errors.append(f"[{pack_id}] pack.json: {err}")
 
     contract_schema = _load_schema("skill-contract.schema.json")
     if contract_schema is None:
+        errors.append(
+            f"[{pack_id}] schema resource unavailable: skill-contract.schema.json"
+        )
         return
     for contract in contracts:
         cid = contract.get("id", "<unknown>")

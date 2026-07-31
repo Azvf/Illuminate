@@ -6,8 +6,17 @@
   "properties": {
     "schema_version": { "type": "integer", "const": 1 },
     "session_id": { "type": "string" },
-    "repo": { "type": "string" },
-    "harness": { "type": "string", "enum": ["claude-code"] },
+    "repo": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string" },
+        "git_root": { "type": "string" },
+        "head": { "type": "string" },
+        "remote": { "type": "string" }
+      }
+    },
+    "harness": { "type": "string", "enum": ["claude-code", "codex"] },
     "packs": {
       "type": "array",
       "items": {

@@ -7,7 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  validate:
+  compatibility:
+    # Version coverage: pack validation + unit tests on every supported Python.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -27,11 +28,22 @@ jobs:
       - name: Validate core pack (incl. contract schema conformance)
         run: illuminate pack validate packs/core
 
-      - name: Contract schema consistency tests
-        run: python -m unittest tests.test_validate -v
-
-      - name: Run tests
+      - name: Run tests (incl. contract schema + adapter consistency)
         run: python -m unittest discover tests -v
+
+  integration:
+    # Full functional smoke tests run once, on a single Python version.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install illuminate
+        run: pip install -e .
 
       - name: Materialization smoke test
         run: |
@@ -99,3 +111,29 @@ jobs:
           illuminate sync clean --repo "$TMPDIR" --harness codebuddy
           test ! -d "$TMPDIR/.codebuddy/rules/illuminate" && echo "PASS: rules cleaned"
           test -f "$TMPDIR/.codebuddy/CODEBUDDY.md" && echo "PASS: CODEBUDDY.md preserved"
+
+  wheel-install:
+    # Build a real wheel, install it, and validate schema conformance from
+    # the installed package (guards against silently-lost packaged schemas).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wheel
+        run: |
+          pip install --quiet build
+          python -m build --wheel --outdir dist
+
+      - name: Install wheel
+        run: pip install --force-reinstall dist/*.whl
+
+      - name: Validate core pack from installed wheel
+        run: illuminate pack validate packs/core
+
+      - name: Verify schemas are bundled with the wheel
+        run: python -c "import illuminate.schemas, importlib.resources, json; json.loads(importlib.resources.files('illuminate.schemas').joinpath('skill-contract.schema.json').read_text(encoding='utf-8')); print('PASS: schemas bundled')"

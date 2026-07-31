@@ -19,7 +19,7 @@ A versioned collection of engineering policies, skills, references, and evidence
 
 - `packs/core/` — The core knowledge pack (policies, skills, references, evidence config)
 - `src/illuminate/` — CLI implementation (validate, resolve, materialize, evidence)
-- `schemas/` — JSON Schemas for pack/contract/mount-plan/mount-lock
+- `src/illuminate/schemas/` — JSON Schemas for pack/contract/mount-plan/mount-lock (bundled with the package)
 - `tests/` — Unit tests
 - `evals/routing/` — Routing evaluation cases
 

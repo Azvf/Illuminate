@@ -74,10 +74,9 @@ class TestContractSchema(unittest.TestCase):
     """Contracts must conform to schemas/skill-contract.schema.json."""
 
     def _load_contract_schema(self):
-        schema = json.loads(
-            (REPO_ROOT / "schemas" / "skill-contract.schema.json").read_text(encoding="utf-8")
-        )
-        return schema
+        from importlib.resources import files
+        data = files("illuminate.schemas").joinpath("skill-contract.schema.json")
+        return json.loads(data.read_text(encoding="utf-8"))
 
     def _load_contracts(self):
         from illuminate.manifest import load_pack_manifest, load_skill_contracts

@@ -1,21 +1,27 @@
 """Cross-adapter consistency tests.
 
 Core invariant: every adapter (session mount, Codex sync, CodeBuddy sync)
-must derive the same final skill set from the same pack + filter, because
-all of them go through the single resolver
+derives the same final skill set from the same pack + filter, because all
+of them go through the single resolver
 (illuminate.resolve.resolve_exposed_skills).
 
-This is the golden contract test that prevents the adapters from drifting
-apart in skill selection / alias / conflict semantics.
+The adapters generate different physical files, but the logical model they
+consume (exposed skills, policies, references, permissions) must be
+identical. These are the golden contract tests that prevent the adapters
+from drifting apart.
 """
 
+import json
 import sys
 import tempfile
 import unittest
+from importlib.resources import files
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from illuminate.jsonschema import validate as validate_schema
+from illuminate.materialize_claude import materialize_session
 from illuminate.resolve import create_mount_plan
 from illuminate.sync_codex import sync_codex
 from illuminate.sync_codebuddy import sync_codebuddy
@@ -48,6 +54,41 @@ ADAPTERS = (
 )
 
 
+def _logical_resolved(skill_filter=None):
+    """The logical model every adapter consumes, from shared functions."""
+    from illuminate.manifest import (
+        load_pack_manifest,
+        load_policy_index,
+        load_skill_contracts,
+    )
+    from illuminate.resolve import resolve_exposed_skills
+
+    manifest = load_pack_manifest(CORE_PACK)
+    contracts = load_skill_contracts(CORE_PACK, manifest)
+    exposed = resolve_exposed_skills(manifest, contracts, skill_filter)
+
+    policies = sorted(
+        load_policy_index(CORE_PACK, manifest).get("policies", []),
+        key=lambda p: p.get("priority", 0),
+        reverse=True,
+    )
+
+    perms = {"read": set(), "write": set(), "execute": set()}
+    exposed_set = set(exposed)
+    for contract in contracts:
+        if contract["id"] not in exposed_set:
+            continue
+        for key in perms:
+            perms[key].update(contract.get("permissions", {}).get(key, []))
+
+    return {
+        "exposed": list(exposed),
+        "policy_ids": [p["id"] for p in policies],
+        "reference_ids": [r["id"] for r in manifest.get("references", [])],
+        "permissions": {k: sorted(v) for k, v in perms.items()},
+    }
+
+
 class TestAdapterConsistency(unittest.TestCase):
 
     def assert_consistent(self, skill_filter=None):
@@ -78,6 +119,85 @@ class TestAdapterConsistency(unittest.TestCase):
         for adapter in ADAPTERS:
             with self.assertRaises(ValueError):
                 adapter(["illuminate.nonexistent"])
+
+
+class TestLogicalGoldenModel(unittest.TestCase):
+    """Adapters consume the same logical model (skills/policies/references/permissions)."""
+
+    def test_mount_plan_matches_logical_model(self):
+        logical = _logical_resolved(["illuminate.layer-debug"])
+        plan = create_mount_plan(
+            CORE_PACK, "/tmp/repo",
+            skill_filter=["illuminate.layer-debug"],
+        )
+        self.assertEqual(plan["skills"]["exposed"], logical["exposed"])
+        self.assertEqual(plan["policies"], logical["policy_ids"])
+
+    def test_codex_sync_matches_logical_model(self):
+        logical = _logical_resolved(["illuminate.layer-debug"])
+        with tempfile.TemporaryDirectory() as tmp:
+            result = sync_codex(
+                CORE_PACK, Path(tmp),
+                skill_filter=["illuminate.layer-debug"],
+            )
+            self.assertEqual(
+                sorted(result["exposed_skills"]), sorted(logical["exposed"])
+            )
+
+    def test_codebuddy_sync_matches_logical_model(self):
+        logical = _logical_resolved(["illuminate.layer-debug"])
+        with tempfile.TemporaryDirectory() as tmp:
+            result = sync_codebuddy(
+                CORE_PACK, Path(tmp),
+                skill_filter=["illuminate.layer-debug"],
+            )
+            self.assertEqual(
+                sorted(result["exposed_skills"]), sorted(logical["exposed"])
+            )
+            # Rules are copied in priority order as 00-*, 01-*, ...
+            rule_files = sorted(
+                (Path(tmp) / ".codebuddy" / "rules" / "illuminate").glob("*.md")
+            )
+            self.assertEqual(len(rule_files), len(logical["policy_ids"]))
+            prefixes = [f.name.split("-", 1)[0] for f in rule_files]
+            self.assertEqual(
+                prefixes, [f"{i:02d}" for i in range(len(rule_files))],
+                "Rule filenames must encode policy priority order",
+            )
+
+    def test_session_lock_permissions_match_logical_model(self):
+        logical = _logical_resolved()
+        with tempfile.TemporaryDirectory() as tmp:
+            info = materialize_session(CORE_PACK, tmp)
+            lock = info["lock"]
+            self.assertEqual(
+                lock["declared_permissions"], logical["permissions"],
+                "Mount lock permissions diverge from the logical model",
+            )
+
+
+class TestSchemaConformance(unittest.TestCase):
+    """Generated artifacts must conform to the bundled JSON Schemas."""
+
+    def test_mount_plan_conforms_to_schema(self):
+        schema = json.loads(
+            files("illuminate.schemas").joinpath("mount-plan.schema.json")
+            .read_text(encoding="utf-8")
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            info = materialize_session(CORE_PACK, tmp)
+            errors = validate_schema(info["mount_plan"], schema)
+            self.assertEqual(errors, [], f"Mount plan fails schema: {errors}")
+
+    def test_mount_lock_conforms_to_schema(self):
+        schema = json.loads(
+            files("illuminate.schemas").joinpath("mount-lock.schema.json")
+            .read_text(encoding="utf-8")
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            info = materialize_session(CORE_PACK, tmp)
+            errors = validate_schema(info["lock"], schema)
+            self.assertEqual(errors, [], f"Mount lock fails schema: {errors}")
 
 
 if __name__ == "__main__":
