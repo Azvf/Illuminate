@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Set
 from urllib.parse import unquote, urlsplit
 
+from .document_layout import normalize_layout
 from .docs_export import _collect_files, _is_within, load_config
 
 DEFAULT_BANNED_TERMS = (
@@ -26,6 +27,7 @@ DEFAULT_BANNED_TERMS = (
 )
 DEFAULT_FORBIDDEN_PATHS = (
     "verification",
+    "70-metadata",
     "80-evidence",
     "90-generated",
     "99-archive",
@@ -87,6 +89,18 @@ def _selected_files(root: Path, config_path: Optional[Path], all_markdown: bool)
     return sorted(selected, key=lambda path: path.relative_to(root).as_posix())
 
 
+def _is_flat_root(relative: str, layout: Optional[dict], kind: str) -> bool:
+    return bool(layout and Path(relative).parts and Path(relative).parts[0] == layout["human_roots"][kind])
+
+
+def _is_module_document(relative: str, layout: Optional[dict]) -> bool:
+    if not relative.endswith(".md"):
+        return False
+    if layout:
+        return _is_flat_root(relative, layout, "modules")
+    return relative.startswith("30-modules/") and Path(relative).name == "README.md"
+
+
 def lint_human(
     root: Path,
     config_path: Optional[Path] = None,
@@ -100,6 +114,14 @@ def lint_human(
     if not root.is_dir():
         return [f"root directory not found: {root}"]
 
+    if config_path is None and not all_markdown:
+        candidate = root / "human-docs.json"
+        config_path = candidate if candidate.is_file() else None
+    try:
+        config = load_config(config_path)
+        layout = normalize_layout(config)
+    except ValueError as exc:
+        return [str(exc)]
     files = _selected_files(root, config_path, all_markdown)
     if not files:
         return ["no Markdown files selected"]
@@ -133,43 +155,41 @@ def lint_human(
                 target.read_text(encoding="utf-8")
             ):
                 errors.append(f"{relative}: missing heading anchor: {raw_target}")
-            if any(
-                part in forbidden
-                for part in Path(target_relative).parts
-            ):
+            if any(part in forbidden for part in Path(target_relative).parts):
                 errors.append(f"{relative}: link points to excluded material: {raw_target}")
             if not target.exists():
                 errors.append(f"{relative}: broken local link: {raw_target}")
             elif target.suffix.lower() == ".md" and target not in selected and not all_markdown:
                 errors.append(f"{relative}: Markdown link is outside export selection: {raw_target}")
-            if (
-                target.exists()
-                and target.suffix.lower() == ".md"
-                and target.name == "README.md"
-                and target_relative.startswith("30-modules/")
-            ):
+            if target.exists() and _is_module_document(target_relative, layout):
                 guide_has_module_link = True
             return match.group(0)
 
         _LINK_RE.sub(check_link, text)
 
-        relative_parts = Path(relative).parts
-        if (
-            len(relative_parts) >= 3
-            and relative_parts[0] == "30-modules"
-            and path.name == "README.md"
-        ):
+        if layout:
+            is_module_doc = _is_flat_root(relative, layout, "modules") and path.suffix.lower() == ".md"
+        else:
+            relative_parts = Path(relative).parts
+            is_module_doc = (
+                len(relative_parts) >= 3
+                and relative_parts[0] == "30-modules"
+                and path.name == "README.md"
+            )
+        if is_module_doc:
             headings = text.lower()
             for section in required_module_sections:
                 if section.lower() not in headings:
                     errors.append(f"{relative}: missing required section: {section}")
 
-        if (
-            relative.startswith("40-journeys/")
-            and path.name != "README.md"
-            and not guide_has_module_link
-        ):
-            errors.append(f"{relative}: guide must link to an existing module README")
+        is_journey_doc = (
+            _is_flat_root(relative, layout, "journeys")
+            if layout
+            else relative.startswith("40-journeys/")
+        )
+        if is_journey_doc and path.name != "README.md" and not guide_has_module_link:
+            target_label = "existing module document" if layout else "existing module README"
+            errors.append(f"{relative}: guide must link to an {target_label}")
 
     return errors
 

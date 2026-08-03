@@ -55,6 +55,58 @@ class TestKnowledgeLint(unittest.TestCase):
             errors = lint_knowledge(root)
             self.assertTrue(any("duplicate id DUP-001" in e for e in errors))
 
+    def _flat_root(self, root: Path) -> Path:
+        docs = root / "docs"
+        for name in ("20-components", "30-modules", "40-journeys"):
+            (docs / name).mkdir(parents=True)
+        (docs / "30-modules" / "demo.md").write_text(
+            "# Demo\n\n## 主流程摘要\n", encoding="utf-8"
+        )
+        (docs / "20-components" / "service.md").write_text(
+            "# Service\n", encoding="utf-8"
+        )
+        (docs / "40-journeys" / "download.md").write_text(
+            "# Download\n", encoding="utf-8"
+        )
+        metadata = docs / "70-metadata"
+        (metadata / "modules" / "demo").mkdir(parents=True)
+        (metadata / "components" / "service").mkdir(parents=True)
+        (metadata / "modules" / "demo" / "module.yaml").write_text(
+            "id: demo\ndocument: 30-modules/demo.md\n", encoding="utf-8"
+        )
+        (metadata / "components" / "service" / "component.yaml").write_text(
+            "id: service\ndocument: 20-components/service.md\n", encoding="utf-8"
+        )
+        (metadata / "modules" / "demo" / "verification").mkdir()
+        (metadata / "modules" / "demo" / "verification" / "claims.yaml").write_text(
+            "- id: CL-DEMO-001\n"
+            "  doc_refs:\n"
+            "    - 30-modules/demo.md#主流程摘要\n",
+            encoding="utf-8",
+        )
+        (docs / "human-docs.json").write_text(
+            '{"layout":"flat-classified","require_manifests":true,"include":["README-HUMAN.md","20-components/*.md","30-modules/*.md","40-journeys/*.md"],"exclude":[],"readme":"README-HUMAN.md"}',
+            encoding="utf-8",
+        )
+        return docs
+
+    def test_flat_classified_manifest_owners_and_refs_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(lint_knowledge(self._flat_root(Path(tmp))), [])
+
+    def test_flat_classified_rejects_orphan_and_relative_ref(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = self._flat_root(Path(tmp))
+            (docs / "30-modules" / "orphan.md").write_text("# Orphan\n", encoding="utf-8")
+            claims = docs / "70-metadata" / "modules" / "demo" / "verification" / "claims.yaml"
+            claims.write_text(
+                "- id: CL-DEMO-001\n  doc_refs:\n    - ../../../../30-modules/demo.md\n",
+                encoding="utf-8",
+            )
+            errors = lint_knowledge(docs)
+            self.assertTrue(any("orphan human document" in error for error in errors))
+            self.assertTrue(any("must be root-relative" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()

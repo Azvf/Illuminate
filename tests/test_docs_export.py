@@ -217,6 +217,50 @@ class TestHumanDocsLint(unittest.TestCase):
             ))
             self.assertEqual(result, 1)
 
+    def test_flat_classified_layout_uses_flat_module_documents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "docs"
+            (source / "20-components").mkdir(parents=True)
+            (source / "30-modules").mkdir()
+            (source / "40-journeys").mkdir()
+            (source / "README-HUMAN.md").write_text(
+                "# Human\n\n[Module](30-modules/demo.md)\n", encoding="utf-8"
+            )
+            sections = [
+                "模块定位与边界", "主流程", "参与组件", "失败", "恢复",
+                "模块交接", "日志", "当前限制",
+            ]
+            (source / "30-modules" / "demo.md").write_text(
+                "# Demo\n\n" + "\n".join(f"## {section}" for section in sections),
+                encoding="utf-8",
+            )
+            (source / "40-journeys" / "download.md").write_text(
+                "# Download\n\n[Demo](../30-modules/demo.md)\n", encoding="utf-8"
+            )
+            (source / "20-components" / "service.md").write_text(
+                "# Service\n", encoding="utf-8"
+            )
+            (source / "human-docs.json").write_text(json.dumps({
+                "layout": "flat-classified",
+                "human_roots": {
+                    "components": "20-components",
+                    "modules": "30-modules",
+                    "journeys": "40-journeys",
+                },
+                "metadata_root": "70-metadata",
+                "require_manifests": True,
+                "doc_refs": "root-relative",
+                "include": [
+                    "README-HUMAN.md",
+                    "20-components/*.md",
+                    "30-modules/*.md",
+                    "40-journeys/*.md",
+                ],
+                "exclude": [],
+                "readme": "README-HUMAN.md",
+            }), encoding="utf-8")
+            self.assertEqual(lint_human(source), [])
+
 
 if __name__ == "__main__":
     unittest.main()

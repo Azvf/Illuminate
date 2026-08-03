@@ -22,6 +22,10 @@ def inspect_repo(repo_root):
         "context_files": [],
         "guideline_dirs": [],
         "framework_dirs": [],
+        "component_dirs": [],
+        "module_dirs": [],
+        "journey_dirs": [],
+        "metadata_dirs": [],
         "has_evidence_overlay": False,
     }
 
@@ -37,6 +41,16 @@ def inspect_repo(repo_root):
                 result["guideline_dirs"].append(doc_dir)
             elif "Framework" in doc_dir:
                 result["framework_dirs"].append(doc_dir)
+
+    for key, doc_dir in (
+        ("component_dirs", "docs/20-components"),
+        ("module_dirs", "docs/30-modules"),
+        ("journey_dirs", "docs/40-journeys"),
+        ("metadata_dirs", "docs/70-metadata"),
+    ):
+        path = repo_root / doc_dir
+        if path.exists() and any(path.rglob("*.md" if key != "metadata_dirs" else "*.yaml")):
+            result[key].append(doc_dir)
 
     overlay = repo_root / ".illuminate" / "evidence" / "patterns_overlay.json"
     result["has_evidence_overlay"] = overlay.exists()
@@ -69,5 +83,17 @@ def print_inspect_report(info, file=None):
         print("  Framework dirs:", file=file)
         for d in info["framework_dirs"]:
             print(f"    - {d}", file=file)
+
+    labels = {
+        "component_dirs": "Component dirs",
+        "module_dirs": "Module dirs",
+        "journey_dirs": "Journey dirs",
+        "metadata_dirs": "Metadata dirs",
+    }
+    for key, label in labels.items():
+        if info[key]:
+            print(f"  {label}:", file=file)
+            for directory in info[key]:
+                print(f"    - {directory}", file=file)
 
     print(f"  Evidence overlay: {'yes' if info['has_evidence_overlay'] else 'no'}", file=file)

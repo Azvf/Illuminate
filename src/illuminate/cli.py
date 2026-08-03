@@ -619,7 +619,8 @@ def _cmd_docs_lint_human(args):
 
 
 def _cmd_docs_lint_knowledge(args):
-    errors = lint_knowledge(Path(args.source).resolve())
+    config_path = Path(args.config).resolve() if args.config else None
+    errors = lint_knowledge(Path(args.source).resolve(), config_path=config_path)
     print(format_knowledge_lint_errors(errors), file=sys.stderr)
     return 1 if errors else 0
 

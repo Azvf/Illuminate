@@ -2,15 +2,23 @@
 
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Dict, Iterable, List, Optional
 from urllib.parse import unquote, urlsplit
 
-from .docs_lint import _is_within, _heading_anchors
+from .document_layout import (
+    discover_manifests,
+    is_root_relative_path,
+    manifest_document_path,
+    normalize_layout,
+    resolve_root_relative_ref,
+)
+from .docs_export import load_config
+from .docs_lint import _heading_anchors
+from .docs_export import _is_within
 
 _METADATA_FILES = ("claims.yaml", "gaps.yaml", "tests.yaml")
-_ID_RE = re.compile(r"^\s*-\s+id:\s*(\S+)\s*$")
-_DOC_RE = re.compile(r"^\s+-\s+(.+?)\s*$")
 _ID_INLINE_RE = re.compile(r"^\s*-\s+id:\s*([^\s#]+)")
+_DOC_RE = re.compile(r"^\s+-\s+(.+?)\s*$")
 
 
 def _strip_yaml_value(value: str) -> str:
@@ -24,6 +32,7 @@ def _metadata_entries(path: Path):
     """Read the small YAML subset needed for id/doc_refs without PyYAML."""
     current_id: Optional[str] = None
     in_doc_refs = False
+    doc_refs: List[str] = []
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.rstrip()
         inline = _ID_INLINE_RE.match(line)
@@ -31,7 +40,7 @@ def _metadata_entries(path: Path):
             if current_id is not None:
                 yield current_id, list(doc_refs)
             current_id = _strip_yaml_value(inline.group(1))
-            doc_refs: List[str] = []
+            doc_refs = []
             in_doc_refs = False
             continue
         if current_id is None:
@@ -59,11 +68,19 @@ def _metadata_entries(path: Path):
         yield current_id, list(doc_refs)
 
 
-def _resolve_doc_ref(metadata_path: Path, ref: str, docs_root: Path) -> Optional[Path]:
+def _resolve_doc_ref(
+    metadata_path: Path,
+    ref: str,
+    docs_root: Path,
+    layout: Optional[dict] = None,
+) -> Optional[Path]:
     target = ref.strip()
     parsed = urlsplit(target)
     if parsed.scheme or parsed.netloc:
         return None
+    if layout:
+        return resolve_root_relative_ref(target, docs_root, layout)
+
     target_path = unquote(parsed.path)
     candidates = []
     if target_path:
@@ -83,13 +100,60 @@ def _resolve_doc_ref(metadata_path: Path, ref: str, docs_root: Path) -> Optional
     return first if _is_within(first, docs_root) else None
 
 
-def lint_knowledge(docs_root: Path) -> List[str]:
-    """Validate metadata IDs and doc_refs for a documentation root."""
+def _lint_flat_owners(docs_root: Path, layout: dict) -> List[str]:
+    errors: List[str] = []
+    owners: Dict[str, Path] = {}
+    manifests = discover_manifests(docs_root, layout)
+    for record in manifests:
+        manifest_path = record["path"]
+        try:
+            document, error = manifest_document_path(docs_root, record, layout)
+        except OSError as exc:
+            errors.append(f"{manifest_path.relative_to(docs_root)}: cannot read manifest: {exc}")
+            continue
+        if error:
+            errors.append(f"{manifest_path.relative_to(docs_root)}: {error}")
+            continue
+        if document in owners:
+            errors.append(
+                f"{manifest_path.relative_to(docs_root)}: duplicate document owner {document} "
+                f"(first in {owners[document].relative_to(docs_root)})"
+            )
+        else:
+            owners[document] = manifest_path
+
+    if layout["require_manifests"]:
+        for kind in ("components", "modules"):
+            root_name = layout["human_roots"][kind]
+            human_root = docs_root / root_name
+            if not human_root.is_dir():
+                continue
+            for document_path in sorted(human_root.rglob("*.md")):
+                document = document_path.relative_to(docs_root).as_posix()
+                if document not in owners:
+                    errors.append(f"{document}: orphan human document without Manifest.document")
+    return errors
+
+
+def lint_knowledge(docs_root: Path, config_path: Optional[Path] = None) -> List[str]:
+    """Validate metadata IDs, doc_refs, and optional flat-layout owners."""
     docs_root = Path(docs_root).resolve()
     if not docs_root.is_dir():
         return [f"documentation root not found: {docs_root}"]
 
+    if config_path is None:
+        candidate = docs_root / "human-docs.json"
+        config_path = candidate if candidate.is_file() else None
+    try:
+        config = load_config(config_path)
+        layout = normalize_layout(config)
+    except ValueError as exc:
+        return [str(exc)]
+
     errors: List[str] = []
+    if layout:
+        errors.extend(_lint_flat_owners(docs_root, layout))
+
     seen_ids: Dict[str, Path] = {}
     metadata_files = [
         path for path in sorted(docs_root.rglob("*.yaml"))
@@ -109,7 +173,14 @@ def lint_knowledge(docs_root: Path) -> List[str]:
                     f"{metadata_path.relative_to(docs_root)}: {item_id} has no doc_refs"
                 )
             for ref in refs:
-                resolved = _resolve_doc_ref(metadata_path, ref, docs_root)
+                parsed = urlsplit(ref.strip())
+                if layout and not is_root_relative_path(unquote(parsed.path), layout):
+                    errors.append(
+                        f"{metadata_path.relative_to(docs_root)}: {item_id} "
+                        f"doc_ref must be root-relative: {ref}"
+                    )
+                    continue
+                resolved = _resolve_doc_ref(metadata_path, ref, docs_root, layout)
                 if resolved is None or not resolved.is_file():
                     errors.append(
                         f"{metadata_path.relative_to(docs_root)}: {item_id} "

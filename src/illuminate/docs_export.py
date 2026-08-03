@@ -11,6 +11,8 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
 
+from .document_layout import LayoutError, normalize_layout
+
 DEFAULT_INCLUDE = (
     "README-HUMAN.md",
     "20-components/**/*.md",
@@ -75,10 +77,15 @@ def load_config(config_path: Optional[Path]) -> Dict[str, object]:
         raise DocsExportError("config.exclude must be an array")
     if readme is not None and not isinstance(readme, str):
         raise DocsExportError("config.readme must be a string or null")
+    try:
+        layout = normalize_layout(config)
+    except LayoutError as exc:
+        raise DocsExportError(str(exc)) from exc
     return {
         "include": _validate_patterns(include, "include"),
         "exclude": _validate_patterns(exclude, "exclude"),
         "readme": readme.replace("\\", "/") if readme else None,
+        "layout": layout,
     }
 
 

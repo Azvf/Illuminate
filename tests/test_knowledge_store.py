@@ -138,6 +138,21 @@ class TestKnowledgeStore(unittest.TestCase):
         self.assertIn("README-HUMAN.md", result["new"])
         self.assertNotIn("30-modules/demo/verification/claims.yaml", result["new"])
 
+    def test_manifest_tracks_flat_classified_metadata(self):
+        manifest = self.repo / "knowledge-manifest.json"
+        manifest.write_text(json.dumps({
+            "roots": ["20-components", "30-modules", "40-journeys", "70-metadata"],
+            "include": ["**/*"],
+            "exclude": ["80-evidence/**", "90-generated/**", "99-archive/**"],
+        }), encoding="utf-8")
+        _create_knowledge_file(self.repo, "30-modules", "demo.md", "module")
+        _create_knowledge_file(self.repo, "70-metadata", "modules/demo/module.yaml", "document: 30-modules/demo.md")
+        result = knowledge_pull(self.repo, store=self.store, manifest_path=manifest)
+        self.assertIn("70-metadata/modules/demo/module.yaml", result["new"])
+        self.assertTrue(
+            (self.store / "projects" / result["project_id"] / "documents" / "70-metadata" / "modules" / "demo" / "module.yaml").exists()
+        )
+
     def test_conflict_does_not_advance_last_synced_baseline(self):
         _create_knowledge_file(self.repo, "Framework", "c.md", "v1")
         first = knowledge_pull(self.repo, store=self.store)
