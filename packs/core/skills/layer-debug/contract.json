@@ -88,8 +88,12 @@
       "AGENTS.md",
       "CLAUDE.md",
       "CONTRIBUTING.md",
-      "docs/Guidelines/**/*.md",
-      "docs/Framework/**/*.md"
+      "docs/README-HUMAN.md",
+      "docs/human-docs.json",
+      "docs/20-components/*.md",
+      "docs/30-modules/*.md",
+      "docs/40-journeys/*.md",
+      "docs/70-metadata/**/*.yaml"
     ],
     "required": false
   }

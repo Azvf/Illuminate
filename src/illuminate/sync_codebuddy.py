@@ -162,9 +162,11 @@ def _sync_commands(
                 "使用 `record-knowledge` Skill。\n\n"
                 "只记录本次开发中已经验证、未来可复用的最小事实。\n\n"
                 "归档规则：\n\n"
-                "- 跨模块通用规范进入 `docs/Guidelines/`\n"
-                "- 单模块职责和功能链路进入 `docs/Framework/`\n"
-                "- 优先更新已有 owner\n"
+                "- 组件/API 细节进入 `docs/20-components/`\n"
+                "- 单模块职责和功能链路进入 `docs/30-modules/`\n"
+                "- 跨模块流程进入 `docs/40-journeys/`\n"
+                "- 身份和验证数据进入 `docs/70-metadata/`\n"
+                "- 优先读取 Manifest.document，再更新已有 owner\n"
                 "- 不扫描整个项目\n"
                 "- 不补齐未经验证的内容\n"
                 "- 不顺便整理无关文档\n\n"
@@ -176,7 +178,7 @@ def _sync_commands(
             "skill_id": "illuminate.archive-module-doc",
             "prompt": (
                 "使用 `archive-module-doc` Skill。\n\n"
-                "将单一模块已经存在且经过验证的知识，整理为结构清晰的 Framework 文档。\n\n"
+                "将单一模块已经存在且经过验证的知识，整理为 `docs/30-modules/<module>.md`。\n\n"
                 "规则：\n\n"
                 "- 只处理一个模块\n"
                 "- 选择 Compact / Standard / Extended 模式\n"
@@ -243,8 +245,10 @@ def _build_codebuddy_block(manifest: dict, exposed: Set[str]) -> str:
         "",
         "项目稳定知识位于：",
         "",
-        "- `docs/Guidelines/`",
-        "- `docs/Framework/`",
+        "- `docs/20-components/`",
+        "- `docs/30-modules/`",
+        "- `docs/40-journeys/`",
+        "- `docs/70-metadata/`",
         "",
         "开发中发现可长期复用的小型事实时，使用 `/record-knowledge`。",
         "当单一模块文档需要形成结构体系时，使用 `/archive-module-doc`。",

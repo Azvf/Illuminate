@@ -1,6 +1,11 @@
-# Module README 模板
+# 模块正文模板
 
-`30-modules/<module>/README.md` 是完整的人类正文 Owner，不是只包含索引的壳：
+`30-modules/<module>.md` 是完整的人类正文 Owner；对应 `70-metadata/modules/<id>/module.yaml` 必须声明：
+
+```yaml
+id: <module>
+document: 30-modules/<module>.md
+```
 
 ```markdown
 # <Module>
@@ -29,8 +34,8 @@
 
 ## 深入阅读
 
-- [组件文档](../../20-components/<component>/README.md)
-- [平台差异](platforms/<platform>.md)
+- [组件文档](20-components/<component>.md)
+- [流程文档](40-journeys/<journey>.md)
 ```
 
-不要在 Markdown 中写 Claim ID、Evidence ID、Hash、测试记录或审计状态。对应机器信息放在模块 `verification/*.yaml`，通过 `doc_refs` 指向标题。
+不要在 Markdown 中写 Claim ID、Evidence ID、Hash、测试记录或审计状态。对应机器信息放在 `70-metadata/modules/<id>/verification/`，通过 root-relative `doc_refs` 指向标题。

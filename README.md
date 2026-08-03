@@ -23,14 +23,23 @@ Keep human-readable Markdown as the source truth and store claims, evidence, and
 
 ```json
 {
+  "layout": "flat-classified",
+  "human_roots": {
+    "components": "20-components",
+    "modules": "30-modules",
+    "journeys": "40-journeys"
+  },
+  "metadata_root": "70-metadata",
+  "require_manifests": true,
+  "doc_refs": "root-relative",
   "include": [
     "README-HUMAN.md",
-    "20-components/**/*.md",
-    "30-modules/**/*.md",
-    "40-journeys/**/*.md"
+    "20-components/*.md",
+    "30-modules/*.md",
+    "40-journeys/*.md"
   ],
   "exclude": [
-    "**/verification/**",
+    "70-metadata/**",
     "80-evidence/**",
     "90-generated/**",
     "99-archive/**"
@@ -80,7 +89,7 @@ Keep human-readable Markdown as the source truth and store claims, evidence, and
 | `illuminate knowledge pull --repo <path> [--store <dir>] [--manifest <json>]` | Pull configured project knowledge to central store |
 | `illuminate knowledge status --repo <path> [--store <dir>] [--manifest <json>]` | Compare configured project knowledge with central store |
 | `illuminate knowledge push --repo <path> [--store <dir>] [--manifest <json>] [--force]` | Push store documents back to project safely |
-| `illuminate docs lint-knowledge --source <dir>` | Validate metadata IDs and YAML `doc_refs` |
+| `illuminate docs lint-knowledge --source <dir> [--config <json>]` | Validate Manifest owners, metadata IDs, and YAML `doc_refs` |
 
 ### Skill Selection
 
@@ -161,17 +170,17 @@ Does NOT modify project-owned `.codebuddy` content. See `sync_codebuddy.py` for 
 
 ## Knowledge Store
 
-Knowledge Store is a local backup and recovery tool. Add an optional `knowledge-manifest.json` at the repository root when the project needs roots beyond `docs/Guidelines/` and `docs/Framework/`; its roots and patterns are relative to `docs/`:
+Knowledge Store is a local backup and recovery tool. Add an optional `knowledge-manifest.json` at the repository root when the project uses the `flat-classified` layout; its roots and patterns are relative to `docs/`:
 
 ```json
 {
-  "roots": ["20-components", "30-modules", "40-journeys", "README-HUMAN.md", "human-docs.json"],
+  "roots": ["20-components", "30-modules", "40-journeys", "70-metadata", "README-HUMAN.md", "human-docs.json"],
   "include": ["**/*"],
   "exclude": ["80-evidence/**", "90-generated/**", "99-archive/**", "dist/**"]
 }
 ```
 
-Without a manifest, only `Guidelines` and `Framework` are tracked. The store keeps documents and a hash baseline under `~/.illuminate/knowledge`; Git remains responsible for history, branches, and collaboration.
+`70-metadata` keeps Manifest identity and verification YAML separate from human Markdown documents. Without a manifest, the legacy default roots `Guidelines` and `Framework` remain supported. The store keeps documents and a hash baseline under `~/.illuminate/knowledge`; Git remains responsible for history, branches, and collaboration.
 
 ```bash
 illuminate knowledge pull --repo /path/to/project --manifest /path/to/project/knowledge-manifest.json

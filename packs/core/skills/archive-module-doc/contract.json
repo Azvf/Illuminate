@@ -37,7 +37,10 @@
       "repository/**"
     ],
     "write": [
-      "docs/Framework/**",
+      "docs/20-components/*.md",
+      "docs/30-modules/*.md",
+      "docs/40-journeys/*.md",
+      "docs/70-metadata/**",
       "docs/文档索引.md"
     ],
     "execute": [
@@ -58,9 +61,10 @@
 
   "project_context": {
     "candidates": [
-      "docs/Framework/**/*.md",
-      "docs/30-modules/**/*.md",
-      "docs/40-journeys/**/*.md",
+      "docs/20-components/*.md",
+      "docs/30-modules/*.md",
+      "docs/40-journeys/*.md",
+      "docs/70-metadata/**/*.yaml",
       "docs/README-HUMAN.md",
       "docs/human-docs.json"
     ],

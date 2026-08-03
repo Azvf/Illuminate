@@ -1,22 +1,20 @@
 # Standard 模块模板
 
-Standard 仍然只有一个正文 Owner：
+Standard 只有一个正文 Owner：
 
 ```text
-30-modules/<module>/README.md
+30-modules/<module>.md
 ```
 
-README 承载完整模块链路；只有平台差异或确实独立的专题才创建子文档：
+对应 Manifest：
 
 ```text
-30-modules/<module>/
-├── README.md
-└── platforms/
-    ├── android.md
-    └── ios.md
+70-metadata/modules/<id>/module.yaml
 ```
 
-README 推荐章节：
+Manifest 的 `document` 必须指向该 Markdown。正文承载完整模块链路；平台差异或独立专题归入相应分类目录，不在 `30-modules/<module>/` 下创建子树。
+
+推荐章节：
 
 ```markdown
 ## 模块定位与边界
@@ -32,4 +30,4 @@ README 推荐章节：
 ## 深入阅读
 ```
 
-验证信息留在 `verification/*.yaml`，通过 `doc_refs` 链接正文。
+验证信息留在 `70-metadata/modules/<id>/verification/`，通过 root-relative `doc_refs` 链接正文。

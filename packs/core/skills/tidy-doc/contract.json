@@ -32,13 +32,12 @@
     ],
     "write": [
       "AGENTS.md",
-      "docs/20-components/**",
-      "docs/30-modules/**",
-      "docs/40-journeys/**",
+      "docs/20-components/*.md",
+      "docs/30-modules/*.md",
+      "docs/40-journeys/*.md",
+      "docs/70-metadata/**",
       "docs/README-HUMAN.md",
       "docs/human-docs.json",
-      "docs/Guidelines/**",
-      "docs/Framework/**",
       "docs/Development/**",
       "packs/core/skills/**"
     ],
@@ -58,13 +57,13 @@
     "candidates": [
       "README-HUMAN.md",
       "human-docs.json",
-      "20-components/**/*.md",
-      "30-modules/**/*",
-      "40-journeys/**/*.md",
-      "**/verification/*.yaml",
-      "Guidelines/**/*.md",
-      "Framework/**/*.md",
-      "Development/**/*.md"
+      "20-components/*.md",
+      "30-modules/*.md",
+      "40-journeys/*.md",
+      "70-metadata/**/*.yaml",
+      "Development/**/*.md",
+      "human-docs.json",
+      "knowledge-manifest.json"
     ],
     "required": false
   },

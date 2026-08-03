@@ -24,9 +24,9 @@ recommended_next: [backtrack-root-cause]
 
 1. `AGENTS.md` / `CLAUDE.md`
 2. `CONTRIBUTING.md`
-3. `docs/Guidelines/`
-4. `docs/Framework/`
-5. 与改动文件距离最近的项目规则
+3. `docs/README-HUMAN.md` 与 `docs/human-docs.json`
+4. `docs/20-components/*.md`、`docs/30-modules/*.md`、`docs/40-journeys/*.md`
+5. `docs/70-metadata/` 中与目标相关的 Manifest 和验证数据
 
 文件不存在时跳过并记录，不得假设其内容。
 

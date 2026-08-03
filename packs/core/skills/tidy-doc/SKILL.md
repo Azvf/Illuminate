@@ -19,7 +19,7 @@ description: Systematically clean up, align, and simplify repository documentati
 以下类型的请求应触发本 skill：
 
 - 精简 `AGENTS.md`、skill、guideline、framework 文档
-- 对齐 `docs/20-components`、`docs/30-modules`、`docs/40-journeys` 与项目声明的 Guidelines root
+- 对齐 `docs/20-components/*.md`、`docs/30-modules/*.md`、`docs/40-journeys/*.md` 与 `docs/70-metadata`
 - 清理重复规则、失效入口、旧目录名、旧组件落点、旧架构说法
 - 检查人类正文与 Verification YAML 的 Owner、`doc_refs` 和导出清单
 - 修正文档索引、skill 触发范围、文档迁移状态
@@ -36,9 +36,9 @@ description: Systematically clean up, align, and simplify repository documentati
 - `AGENTS.md`
 - 相关 skill 的 `SKILL.md`
 - 相关 `docs/README-HUMAN.md` 与 `docs/human-docs.json`
-- 相关 `docs/20-components/**/*.md`
-- 相关 `docs/30-modules/**` 与 `docs/40-journeys/**/*.md`
-- 项目声明的 Guidelines root
+- 相关 `docs/20-components/*.md`
+- 相关 `docs/30-modules/*.md` 与 `docs/40-journeys/*.md`
+- 相关 `docs/70-metadata/**/*.yaml` 与 Manifest.document
 - 必要时读取 `docs/Development/Active/*.md` 与 `docs/Development/Archived/*.md`
 
 先回答：
@@ -68,10 +68,10 @@ description: Systematically clean up, align, and simplify repository documentati
 1. `AGENTS.md`
 2. 对应 skill
 3. `docs/README-HUMAN.md`、`docs/human-docs.json`
-4. `docs/30-modules` 和 `docs/40-journeys` 中的稳定人类正文
-5. `docs/20-components` 与项目声明的 Guidelines root
-6. `docs/Research`、`docs/Issues`、`docs/Development/*`
-7. `verification/*.yaml` 及其 `doc_refs`
+4. `docs/30-modules/*.md` 和 `docs/40-journeys/*.md` 中的稳定人类正文
+5. `docs/20-components/*.md`
+6. `docs/70-metadata/` 中的 Manifest 与 Verification YAML
+7. `docs/Research`、`docs/Issues`、`docs/Development/*`
 
 原因：
 
@@ -181,28 +181,23 @@ A["第一行\n第二行"]
 
 修改 Mermaid 后，至少执行一次源码残留扫描；具备预览能力时，还应检查实际渲染结果。图中结论必须与正文一致。
 
-### 6. 区分三类文档
+### 6. 区分正文与治理数据
 
 整理时始终区分：
 
-- `Guidelines`
-  - 回答"默认做法 / 门禁 / 施工约束"
-- `Framework`
-  - 回答"当前稳定基线是什么"
-- `Research`
-  - 回答"逆向了什么、结论是什么、待确认什么"
-- `Issues`
-  - 回答"出了什么问题、现场是什么、怎么修的"
-- `Development`
-  - 回答"当前推进中的主题怎么做"
+- `20-components/*.md`：组件/API 生命周期与实现边界
+- `30-modules/*.md`：单模块稳定职责、链路和边界
+- `40-journeys/*.md`：跨模块顺序、交接和决策
+- `70-metadata/`：Manifest、Claim、Evidence、Gap、Test 和状态
+- `Research`、`Issues`、`Development`：过程材料，不直接成为稳定正文 Owner
 
-默认 owner 规则：
+默认 Owner 规则：
 
-- 架构事实、稳定职责、共享协议、框架语义，只保留一个 `Framework` owner
-- `Guideline` 不重复定义框架语义，只补默认做法、接入步骤、删旧要求、验证门禁
-- `Development` 不承担长期基线；主题结束后默认先迁到 `Archived`
+- 每份稳定 Markdown 只由一个 Manifest 的 `document` 字段拥有
+- `70-metadata` 不复制人类正文，只保存机器治理数据和 `doc_refs`
+- 过程材料中的已验证事实收口到唯一分类正文；主题结束后清理过期过程入口
 
-如果一个文档同时承载了三类内容，优先把它收口到单一职责，而不是继续堆。
+如果一个文档同时承载正文和治理数据，优先拆分职责，而不是继续堆叠。
 
 ### 7. 同步索引与 skill
 

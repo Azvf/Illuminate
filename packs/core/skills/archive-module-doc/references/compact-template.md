@@ -1,9 +1,10 @@
 # Compact 模块模板
 
-Compact 不再创建独立的 `docs/Framework/<Module>.md`。即使模块只有一条链路，也使用完整正文 Owner：
+Compact 使用扁平正文 Owner，不创建独立的旧式 Framework 文档：
 
 ```text
-30-modules/<module>/README.md
+30-modules/<module>.md
+70-metadata/modules/<id>/module.yaml
 ```
 
 至少包含：
@@ -19,4 +20,4 @@ Compact 不再创建独立的 `docs/Framework/<Module>.md`。即使模块只有�
 ## 当前限制与待确认问题
 ```
 
-内容较少时可以省略不适用章节，但 README 仍然是人类可读的主文档。
+内容较少时可以省略不适用章节，但 Markdown 仍然是人类可读的主文档，Manifest 的 `document` 必须指向它。
