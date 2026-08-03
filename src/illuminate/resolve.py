@@ -58,8 +58,8 @@ def resolve_exposed_skills(
     IDs in deterministic order.
 
     Raises:
-        ValueError: If skill_filter contains unknown IDs, alias cycles, or
-                    conflicting skills are selected together.
+        ValueError: If skill_filter contains unknown IDs, alias cycles,
+                    alias targets that do not exist, or is empty.
     """
     # Build alias map
     alias_map = {}
@@ -74,6 +74,11 @@ def resolve_exposed_skills(
             c["id"] for c in contracts
             if c.get("kind", "skill") != "alias"
         ]
+
+    if not skill_filter:
+        raise ValueError(
+            "skill_filter must be None (expose all) or contain at least one skill ID"
+        )
 
     # Validate filter IDs exist
     unknown = [sid for sid in skill_filter if sid not in all_skill_ids]
@@ -96,8 +101,52 @@ def resolve_exposed_skills(
             current = alias_map[current]
         resolved.append(current)
 
+    # Validate every alias resolves to a real skill
+    missing = [rid for rid in resolved if rid not in all_skill_ids]
+    if missing:
+        raise ValueError(
+            f"Alias target(s) do not exist in pack: {', '.join(missing)}"
+        )
+
     # Deduplicate (multiple aliases may resolve to same target)
     return list(dict.fromkeys(resolved))
+
+
+def resolve_pack(
+    pack_dir: Path,
+    repo: str,
+    skill_filter: List[str] = None,
+) -> dict:
+    """Resolve pack inputs into one canonical, adapter-neutral structure.
+
+    The returned value contains the loaded manifest and contracts, policies in
+    priority order, selected skills, and the pack/repository identities used by
+    downstream mount or sync adapters.
+    """
+    pack_path = Path(pack_dir).expanduser().resolve()
+    manifest = load_pack_manifest(pack_path)
+    policy_index = load_policy_index(pack_path, manifest)
+    contracts = load_skill_contracts(pack_path, manifest)
+    policies = sorted(
+        policy_index.get("policies", []),
+        key=lambda policy: policy.get("priority", 0),
+        reverse=True,
+    )
+    exposed = resolve_exposed_skills(manifest, contracts, skill_filter)
+
+    return {
+        "pack_dir": str(pack_path),
+        "manifest": manifest,
+        "policy_index": policy_index,
+        "policies": policies,
+        "contracts": contracts,
+        "pack": {
+            "id": manifest["id"],
+            "version": manifest["version"],
+        },
+        "repo": _resolve_repo(repo),
+        "skills": {"exposed": exposed},
+    }
 
 
 def create_mount_plan(
@@ -117,39 +166,17 @@ def create_mount_plan(
     Raises:
         ValueError: If skill_filter contains unknown IDs or alias cycles.
     """
-    manifest = load_pack_manifest(pack_dir)
-    policy_index = load_policy_index(pack_dir, manifest)
-    contracts = load_skill_contracts(pack_dir, manifest)
-
-    # Resolve repo path + git identity
-    repo_info = _resolve_repo(repo)
-
-    # Determine exposed skills via the single shared resolver
-    exposed = resolve_exposed_skills(manifest, contracts, skill_filter)
-
-    # Collect policy ids
-    policies = sorted(
-        policy_index.get("policies", []),
-        key=lambda p: p.get("priority", 0),
-        reverse=True,
-    )
-    policy_ids = [p["id"] for p in policies]
+    resolved = resolve_pack(pack_dir, repo, skill_filter)
+    policy_ids = [policy["id"] for policy in resolved["policies"]]
 
     plan = {
         "schema_version": 1,
         "session_id": str(uuid.uuid4()),
-        "repo": repo_info,
+        "repo": resolved["repo"],
         "harness": "claude-code",
-        "packs": [
-            {
-                "id": manifest["id"],
-                "version": manifest["version"],
-            }
-        ],
+        "packs": [resolved["pack"]],
         "policies": policy_ids,
-        "skills": {
-            "exposed": exposed,
-        },
+        "skills": resolved["skills"],
     }
 
     return plan

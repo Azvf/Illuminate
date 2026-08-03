@@ -36,6 +36,20 @@
           "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
         }
       }
-    }
+    },
+    "harness": { "type": "string" },
+    "pack": {
+      "type": "object",
+      "required": ["id", "version", "hash"],
+      "properties": {
+        "id": { "type": "string" },
+        "version": { "type": "string" },
+        "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      }
+    },
+    "target": { "type": "object" },
+    "selection": { "type": "object" },
+    "managed_artifacts": { "type": "array", "items": { "type": "string" } },
+    "capabilities": { "type": "object" }
   }
 }

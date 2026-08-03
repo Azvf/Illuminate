@@ -112,6 +112,17 @@ class TestMaterializeClaude(unittest.TestCase):
         self.assertTrue(lock["pack_lock_hash"].startswith("sha256:"))
         self.assertGreater(len(lock["files"]), 0)
 
+    def test_lock_has_common_envelope(self):
+        info = materialize_session(CORE_PACK, str(self.tmpdir))
+        lock = info["lock"]
+        self.assertEqual(lock["schema_version"], 1)
+        self.assertEqual(lock["harness"], "claude-code")
+        self.assertEqual(lock["pack"]["id"], "illuminate.core")
+        self.assertEqual(lock["target"], info["mount_plan"]["repo"])
+        self.assertEqual(lock["selection"]["skills"], lock["exposed_skills"])
+        self.assertIn("CLAUDE.md", lock["managed_artifacts"])
+        self.assertIn("capabilities", lock)
+
     def test_lock_contains_declared_permissions(self):
         """Lock file should record declared, enforced, and unsupported
         permissions separately (the three-layer permission model)."""

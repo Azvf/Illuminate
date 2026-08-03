@@ -8,12 +8,36 @@ from typing import List, Dict, Optional
 from .hashutil import hash_file, lock_hash, hash_directory
 
 
+def build_lock_envelope(
+    *,
+    harness: str,
+    pack: dict,
+    target,
+    selection: dict,
+    managed_artifacts,
+    capabilities: Optional[dict] = None,
+) -> dict:
+    """Build the adapter-neutral portion of a lock document."""
+    envelope = {
+        "schema_version": 1,
+        "harness": harness,
+        "pack": dict(pack),
+        "target": target,
+        "selection": dict(selection),
+        "managed_artifacts": sorted(set(managed_artifacts)),
+    }
+    if capabilities is not None:
+        envelope["capabilities"] = dict(capabilities)
+    return envelope
+
+
 def create_lock(
     session_dir: Path,
     session_id: str,
     pack_dir: Path,
     permission_info: Optional[dict] = None,
     external_files: Optional[List[tuple]] = None,
+    envelope: Optional[dict] = None,
 ) -> dict:
     """Create a mount-lock.json for a session.
 
@@ -68,6 +92,9 @@ def create_lock(
             }
             for role, path in external_files
         ]
+
+    if envelope:
+        lock.update(envelope)
 
     lock_path = session_dir / "mount-lock.json"
     with open(lock_path, "w", encoding="utf-8") as f:

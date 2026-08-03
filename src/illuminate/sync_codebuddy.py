@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
 from .hashutil import hash_file, hash_directory, lock_hash
+from .lockfile import build_lock_envelope
 from .managed_block import (
     BEGIN_MARKER as _BEGIN_MARKER,
     END_MARKER as _END_MARKER,
@@ -24,8 +25,8 @@ from .managed_block import (
     merge_block,
     remove_block,
 )
-from .manifest import load_pack_manifest, load_policy_index, load_skill_contracts
-from .resolve import resolve_exposed_skills
+from .manifest import load_policy_index
+from .resolve import resolve_pack
 from .validate import validate_pack
 
 
@@ -90,12 +91,25 @@ def _sync_skills(
     Returns {skill_name: {file_rel: sha256}} for all synced skill files.
     """
     skills_dir = repo_root / _SKILLS_DIR
-    skills_dir.mkdir(parents=True, exist_ok=True)
 
     # Load existing lock to know which skills Illuminate manages
     lock = _load_lock(repo_root)
     managed_skills = {e["name"] for e in lock.get("skills", [])}
 
+    # Pre-flight collision check: fail closed before touching the repo, so a
+    # project-owned directory that shares a skill's name is never overwritten.
+    for entry in manifest.get("skills", []):
+        if entry["id"] not in exposed:
+            continue
+        skill_name = entry["dir"].split("/")[-1]
+        dest_dir = skills_dir / skill_name
+        if dest_dir.exists() and skill_name not in managed_skills:
+            raise ValueError(
+                f"Cannot sync skill '{skill_name}': "
+                "destination already exists and is not Illuminate-managed"
+            )
+
+    skills_dir.mkdir(parents=True, exist_ok=True)
     synced: Dict[str, Dict[str, str]] = {}
 
     for entry in manifest.get("skills", []):
@@ -297,20 +311,35 @@ def _write_lock(
             "files": file_hashes,
         })
 
-    lock = {
-        "schema_version": 1,
-        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "pack": {
+    lock = build_lock_envelope(
+        harness="codebuddy",
+        pack={
             "id": manifest.get("id", "?"),
             "version": manifest.get("version", "?"),
             "hash": lock_hash(pack_hash),
         },
+        target={"path": str(repo_root)},
+        selection={"skills": sorted(exposed)},
+        managed_artifacts=[
+            ".codebuddy/CODEBUDDY.md",
+            *[f".codebuddy/rules/illuminate/{name}" for name in rule_hashes],
+            *[
+                f".codebuddy/skills/{entry['name']}/{rel}"
+                for entry in skill_entries
+                for rel in entry["files"]
+            ],
+            *[f".codebuddy/commands/{name}" for name in command_hashes],
+        ],
+        capabilities={"permissions": "declarative-only"},
+    )
+    lock.update({
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "exposed_skills": sorted(exposed),
         "rules": rule_hashes,
         "skills": skill_entries,
         "commands": command_hashes,
         "codebuddy_md_hash": codebuddy_hash,
-    }
+    })
 
     lock_path = lock_dir / "codebuddy-lock.json"
     with open(lock_path, "w", encoding="utf-8") as f:
@@ -350,11 +379,11 @@ def sync_codebuddy(
     if not ok:
         raise ValueError("Pack validation failed:\n" + "\n".join(errors))
 
-    manifest = load_pack_manifest(pack_dir)
-    contracts = load_skill_contracts(pack_dir, manifest)
-
-    # 2. Resolve exposed skills via the single shared resolver
-    exposed = set(resolve_exposed_skills(manifest, contracts, skill_filter))
+    # 2. Resolve pack through the single shared resolution entry
+    resolved = resolve_pack(pack_dir, str(repo_root), skill_filter)
+    manifest = resolved["manifest"]
+    contracts = resolved["contracts"]
+    exposed = set(resolved["skills"]["exposed"])
 
     # 3. Sync rules
     rule_hashes = _sync_rules(pack_dir, repo_root, manifest)

@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from illuminate.jsonschema import validate as validate_schema
 from illuminate.materialize_claude import materialize_session
-from illuminate.resolve import create_mount_plan
+from illuminate.resolve import create_mount_plan, resolve_pack
 from illuminate.sync_codex import sync_codex
 from illuminate.sync_codebuddy import sync_codebuddy
 
@@ -102,6 +102,20 @@ class TestAdapterConsistency(unittest.TestCase):
 
     def test_default_exposed_set_consistent(self):
         self.assert_exposed_consistent(None)
+
+    def test_resolve_pack_matches_each_adapter(self):
+        for skill_filter in (None, ["illuminate.grill-me"], ["illuminate.layer-debug"]):
+            expected = sorted(
+                resolve_pack(CORE_PACK, "/tmp/repo", skill_filter=skill_filter)[
+                    "skills"
+                ]["exposed"]
+            )
+            for adapter in ADAPTERS:
+                self.assertEqual(
+                    expected,
+                    adapter(skill_filter),
+                    f"{adapter.__name__} diverged from resolve_pack",
+                )
 
     def test_single_skill_filter_consistent(self):
         self.assert_exposed_consistent(["illuminate.layer-debug"])

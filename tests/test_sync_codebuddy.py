@@ -110,6 +110,12 @@ class TestSyncCodeBuddy(unittest.TestCase):
         self.assertIn("skills", lock)
         self.assertIn("commands", lock)
         self.assertIn("codebuddy_md_hash", lock)
+        self.assertEqual(lock["schema_version"], 1)
+        self.assertEqual(lock["harness"], "codebuddy")
+        self.assertEqual(lock["target"]["path"], str(repo.resolve()))
+        self.assertEqual(lock["selection"]["skills"], lock["exposed_skills"])
+        self.assertIn(".codebuddy/CODEBUDDY.md", lock["managed_artifacts"])
+        self.assertEqual(lock["capabilities"], {"permissions": "declarative-only"})
 
     def test_sync_does_not_modify_existing_user_content(self):
         repo = self._make_repo()
@@ -135,6 +141,47 @@ class TestSyncCodeBuddy(unittest.TestCase):
 
         self.assertTrue(proj_skill.exists(),
                         "Project-owned skills should survive sync")
+
+    def test_first_sync_rejects_unmanaged_same_name_skill(self):
+        """A project-owned skill sharing an Illuminate skill's name must
+        fail closed on first sync (no overwrite, no claiming)."""
+        repo = self._make_repo()
+        project_skill = repo / ".codebuddy" / "skills" / "layer-debug"
+        project_skill.mkdir(parents=True)
+        project_skill.joinpath("SKILL.md").write_text(
+            "# project-owned layer-debug", encoding="utf-8"
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            sync_codebuddy(CORE_PACK, repo)
+        self.assertIn("not Illuminate-managed", str(ctx.exception))
+
+    def test_failed_collision_never_claims_or_deletes_existing_skill(self):
+        repo = self._make_repo()
+        project_skill = repo / ".codebuddy" / "skills" / "layer-debug"
+        project_skill.mkdir(parents=True)
+        original = "# project-owned layer-debug\nconfig: 42\n"
+        project_skill.joinpath("SKILL.md").write_text(original, encoding="utf-8")
+        project_skill.joinpath("project-config.json").write_text("{}", encoding="utf-8")
+
+        with self.assertRaises(ValueError):
+            sync_codebuddy(CORE_PACK, repo)
+
+        self.assertEqual(
+            project_skill.joinpath("SKILL.md").read_text(encoding="utf-8"),
+            original,
+            "Existing skill content must be untouched after failed sync",
+        )
+        self.assertTrue(project_skill.joinpath("project-config.json").exists())
+        # Fail-before-write: no CODEBUDDY.md, no lock, no other skill dirs
+        self.assertFalse(
+            (repo / ".codebuddy" / "CODEBUDDY.md").exists(),
+            "Failed sync must not write CODEBUDDY.md",
+        )
+        self.assertFalse(
+            (repo / ".illuminate").exists(),
+            "Failed sync must not write a lock claiming the colliding skill",
+        )
 
     def test_check_passes_after_sync(self):
         repo = self._make_repo()

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from .hashutil import hash_file, hash_directory, lock_hash
+from .lockfile import build_lock_envelope
 from .managed_block import (
     BEGIN_MARKER as _BEGIN_MARKER,
     END_MARKER as _END_MARKER,
@@ -23,8 +24,8 @@ from .managed_block import (
     merge_block,
     remove_block,
 )
-from .manifest import load_pack_manifest, load_policy_index, load_skill_contracts
-from .resolve import resolve_exposed_skills
+from .manifest import load_policy_index
+from .resolve import resolve_pack
 from .validate import validate_pack
 
 
@@ -237,18 +238,31 @@ def _create_codex_lock(
 
     pack_hash = hash_directory(pack_dir)
 
-    lock = {
-        "schema_version": 1,
-        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "pack": {
+    lock = build_lock_envelope(
+        harness="codex",
+        pack={
             "id": manifest.get("id", "?"),
             "version": manifest.get("version", "?"),
             "hash": lock_hash(pack_hash),
         },
+        target={"path": str(repo_root)},
+        selection={"skills": sorted(exposed)},
+        managed_artifacts=[
+            "AGENTS.md",
+            *[
+                f".agents/skills/{entry['name']}/{rel}"
+                for entry in skill_entries
+                for rel in entry["files"]
+            ],
+        ],
+        capabilities={"permissions": "declarative-only"},
+    )
+    lock.update({
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "exposed_skills": sorted(exposed),
         "agents_md_hash": agents_hash,
         "skills": skill_entries,
-    }
+    })
 
     lock_path = lock_dir / "codex-lock.json"
     with open(lock_path, "w", encoding="utf-8") as f:
@@ -302,11 +316,11 @@ def sync_codex(
             "Pack validation failed:\n" + "\n".join(errors)
         )
 
-    manifest = load_pack_manifest(pack_dir)
-    contracts = load_skill_contracts(pack_dir, manifest)
-
-    # 2. Resolve exposed skills via the single shared resolver
-    exposed = set(resolve_exposed_skills(manifest, contracts, skill_filter))
+    # 2. Resolve pack through the single shared resolution entry
+    resolved = resolve_pack(pack_dir, str(repo_root), skill_filter)
+    manifest = resolved["manifest"]
+    contracts = resolved["contracts"]
+    exposed = set(resolved["skills"]["exposed"])
 
     # 3. Sync .agents/skills/ first (lock-owned; project-owned skills
     # preserved; collisions fail closed before any repo modification)

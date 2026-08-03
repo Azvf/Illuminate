@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .resolve import create_mount_plan, resolve_file_list
-from .lockfile import create_lock
+from .lockfile import build_lock_envelope, create_lock
 from .manifest import load_pack_manifest, load_policy_index, load_skill_contracts
 from .hashutil import hash_directory, lock_hash
 from .validate import validate_pack
@@ -200,9 +200,29 @@ def materialize_session(pack_dir, repo, skill_filter=None):
     permission_info = _gather_permissions(mount_plan, contracts)
 
     # Create mount-lock.json
+    managed_artifacts = [entry["dest"] for entry in file_list]
+    managed_artifacts.extend([
+        "CLAUDE.md",
+        "claude-settings.json",
+        "mount-plan.json",
+    ])
+    pack_hash = lock_hash(hash_directory(pack_dir))
+    envelope = build_lock_envelope(
+        harness="claude-code",
+        pack={
+            "id": manifest.get("id", "?"),
+            "version": manifest.get("version", "?"),
+            "hash": pack_hash,
+        },
+        target=mount_plan["repo"],
+        selection={"skills": sorted(exposed)},
+        managed_artifacts=managed_artifacts,
+        capabilities={"permissions": permission_info["enforcement_status"]},
+    )
     lock = create_lock(
         session_dir, session_id, pack_dir,
         permission_info=permission_info,
+        envelope=envelope,
     )
 
     return {

@@ -139,6 +139,11 @@ class TestSyncCodex(unittest.TestCase):
         self.assertIn("exposed_skills", lock)
         self.assertIn("agents_md_hash", lock)
         self.assertIn("skills", lock)
+        self.assertEqual(lock["schema_version"], 1)
+        self.assertEqual(lock["harness"], "codex")
+        self.assertEqual(lock["target"]["path"], str(repo.resolve()))
+        self.assertEqual(lock["selection"]["skills"], lock["exposed_skills"])
+        self.assertIn("AGENTS.md", lock["managed_artifacts"])
 
     def test_sync_does_not_modify_existing_user_content(self):
         repo = self._make_repo()

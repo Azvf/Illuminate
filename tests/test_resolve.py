@@ -8,13 +8,43 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from illuminate.resolve import create_mount_plan, resolve_file_list
+from illuminate.resolve import (
+    create_mount_plan,
+    resolve_exposed_skills,
+    resolve_file_list,
+    resolve_pack,
+)
+from illuminate.manifest import load_pack_manifest, load_skill_contracts
 
 REPO_ROOT = Path(__file__).parent.parent
 CORE_PACK = REPO_ROOT / "packs" / "core"
 
 
 class TestResolve(unittest.TestCase):
+
+    def test_resolve_pack_unifies_pack_contents_and_identities(self):
+        resolved = resolve_pack(CORE_PACK, "/test/repo")
+
+        self.assertEqual(resolved["pack"], {
+            "id": "illuminate.core",
+            "version": "0.1.0",
+        })
+        self.assertEqual(resolved["pack_dir"], str(CORE_PACK.resolve()))
+        self.assertEqual(resolved["manifest"]["id"], "illuminate.core")
+        self.assertEqual(
+            resolved["policies"],
+            sorted(
+                resolved["policy_index"]["policies"],
+                key=lambda item: item.get("priority", 0),
+                reverse=True,
+            ),
+        )
+        self.assertEqual(
+            resolved["skills"]["exposed"],
+            [contract["id"] for contract in resolved["contracts"]
+             if contract.get("kind", "skill") != "alias"],
+        )
+        self.assertEqual(resolved["repo"]["path"], str(Path("/test/repo").resolve()))
 
     def test_create_mount_plan(self):
         plan = create_mount_plan(CORE_PACK, "/test/repo")
@@ -82,6 +112,29 @@ class TestResolve(unittest.TestCase):
                 skill_filter=["illuminate.nonexistent"],
             )
         self.assertIn("Unknown skill ID", str(ctx.exception))
+
+    def test_empty_skill_filter_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            create_mount_plan(CORE_PACK, "/test/repo", skill_filter=[])
+        self.assertIn("at least one skill ID", str(ctx.exception))
+
+    def test_alias_target_must_exist(self):
+        manifest = load_pack_manifest(CORE_PACK)
+        contracts = load_skill_contracts(CORE_PACK, manifest)
+        broken = [
+            {
+                **contract,
+                "target": "illuminate.does-not-exist",
+            }
+            if contract["id"] == "illuminate.grill-me"
+            else contract
+            for contract in contracts
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            resolve_exposed_skills(
+                manifest, broken, skill_filter=["illuminate.grill-me"]
+            )
+        self.assertIn("do not exist", str(ctx.exception))
 
     def test_activation_conflicting_skills_can_be_exposed(self):
         """activation_conflicts is activation-level metadata: both skills
