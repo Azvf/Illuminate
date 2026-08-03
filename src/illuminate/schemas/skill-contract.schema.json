@@ -2,6 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Illuminate Skill Contract",
   "type": "object",
+  "additionalProperties": false,
   "required": ["schema_version", "id", "version", "entry", "activation"],
   "properties": {
     "schema_version": { "type": "integer", "const": 1 },
@@ -10,7 +11,7 @@
       "pattern": "^[a-z0-9.-]+$",
       "description": "Skill identifier, e.g. illuminate.layer-debug"
     },
-    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
     "entry": { "type": "string", "description": "Path to SKILL.md relative to skill dir" },
     "kind": {
       "type": "string",
@@ -36,6 +37,7 @@
 
     "requirements": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "required_artifacts": { "type": "array", "items": { "type": "string" } },
         "preferred_artifacts": { "type": "array", "items": { "type": "string" } },
@@ -46,6 +48,7 @@
     "execution_modes": {
       "type": "object",
       "description": "Optional: defines degraded execution modes",
+      "additionalProperties": false,
       "properties": {
         "full": { "$ref": "#/definitions/execution_mode" },
         "diagnostic": { "$ref": "#/definitions/execution_mode" },
@@ -55,6 +58,7 @@
 
     "permissions": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "read": { "type": "array", "items": { "type": "string" } },
         "write": { "type": "array", "items": { "type": "string" } },
@@ -76,6 +80,7 @@
 
     "project_context": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "candidates": { "type": "array", "items": { "type": "string" } },
         "required": { "type": "boolean", "default": false }

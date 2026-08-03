@@ -10,7 +10,7 @@
       "pattern": "^[a-z0-9.-]+$",
       "description": "Pack identifier, e.g. illuminate.core"
     },
-    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
     "name": { "type": "string" },
     "description": { "type": "string" },
     "policies": {
