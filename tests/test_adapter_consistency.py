@@ -180,6 +180,72 @@ class TestLogicalGoldenModel(unittest.TestCase):
                 "Mount lock permissions diverge from the logical model",
             )
 
+    def test_mount_plan_references_match_logical_model(self):
+        """Every pack reference must be present in the mount file list."""
+        from illuminate.manifest import load_pack_manifest
+        from illuminate.resolve import resolve_file_list
+
+        manifest = load_pack_manifest(CORE_PACK)
+        plan = create_mount_plan(CORE_PACK, "/tmp/repo")
+        files = resolve_file_list(CORE_PACK, plan)
+        ref_dests = sorted(f["dest"] for f in files if f["kind"] == "reference")
+        expected = sorted(r["path"] for r in manifest.get("references", []))
+        self.assertEqual(ref_dests, expected)
+
+    def test_codex_physical_file_mapping(self):
+        """Each exposed skill's actual synced files must equal the pack's
+        skill files plus the generated agents/openai.yaml."""
+        from illuminate.manifest import load_pack_manifest
+
+        manifest = load_pack_manifest(CORE_PACK)
+        with tempfile.TemporaryDirectory() as tmp:
+            result = sync_codex(CORE_PACK, Path(tmp))
+            exposed_ids = set(result["exposed_skills"])
+            skills_root = Path(tmp) / ".agents" / "skills"
+            for entry in manifest.get("skills", []):
+                if entry["id"] not in exposed_ids:
+                    continue
+                skill_name = entry["dir"].split("/")[-1]
+                src_dir = CORE_PACK / entry["dir"]
+                expected = {
+                    f.relative_to(src_dir).as_posix()
+                    for f in src_dir.rglob("*") if f.is_file()
+                }
+                expected.add("agents/openai.yaml")
+                dst_dir = skills_root / skill_name
+                actual = {
+                    f.relative_to(dst_dir).as_posix()
+                    for f in dst_dir.rglob("*") if f.is_file()
+                }
+                self.assertEqual(
+                    actual, expected,
+                    f"Codex file mapping diverged for {skill_name}",
+                )
+
+    def test_codebuddy_rules_content_matches_policies(self):
+        """Each rule file must be a verbatim copy of its source policy."""
+        from illuminate.manifest import load_pack_manifest, load_policy_index
+
+        manifest = load_pack_manifest(CORE_PACK)
+        policies = sorted(
+            load_policy_index(CORE_PACK, manifest).get("policies", []),
+            key=lambda p: p.get("priority", 0),
+            reverse=True,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            sync_codebuddy(CORE_PACK, Path(tmp))
+            rules_dir = Path(tmp) / ".codebuddy" / "rules" / "illuminate"
+            for i, policy in enumerate(policies):
+                expected = (
+                    CORE_PACK / "policies" / policy["path"]
+                ).read_text(encoding="utf-8")
+                rule_path = rules_dir / f"{i:02d}-{Path(policy['path']).stem}.md"
+                self.assertTrue(rule_path.exists(), f"Missing rule for {policy['id']}")
+                self.assertEqual(
+                    rule_path.read_text(encoding="utf-8"), expected,
+                    f"Rule {i:02d} content diverges from policy {policy['id']}",
+                )
+
 
 class TestSchemaConformance(unittest.TestCase):
     """Generated artifacts must conform to the bundled JSON Schemas."""
