@@ -192,6 +192,17 @@ class TestHumanDocsLint(unittest.TestCase):
             errors = lint_human(source)
             self.assertTrue(any("existing module README" in error for error in errors))
 
+    def test_lint_checks_markdown_heading_fragments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = self._clean_source(Path(tmp))
+            guide = source / "40-journeys" / "01.md"
+            guide.write_text(
+                "# Journey\n\n[Demo](../30-modules/demo/README.md#missing-section)\n",
+                encoding="utf-8",
+            )
+            errors = lint_human(source)
+            self.assertTrue(any("missing heading anchor" in error for error in errors))
+
     def test_cli_handler_returns_failure_for_invalid_human_docs(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = self._clean_source(Path(tmp))

@@ -2,8 +2,8 @@
 
 import re
 from pathlib import Path
-from typing import Iterable, List, Optional
-from urllib.parse import urlsplit
+from typing import Iterable, List, Optional, Set
+from urllib.parse import unquote, urlsplit
 
 from .docs_export import _collect_files, _is_within, load_config
 
@@ -41,6 +41,25 @@ DEFAULT_MODULE_SECTIONS = (
     "当前限制",
 )
 _LINK_RE = re.compile(r"(?<!！)(?<!\!)\[([^\]]+)\]\(([^)]+)\)")
+_HEADING_RE = re.compile(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$")
+
+
+def _heading_slug(heading: str) -> str:
+    """Create the GitHub-style fragment used by Markdown doc_refs."""
+    heading = re.sub(r"<[^>]+>", "", heading)
+    heading = unquote(heading).strip().lower()
+    heading = re.sub(r"[`*_~]", "", heading)
+    heading = re.sub(r"[^\w\u0080-\uffff -]", "", heading)
+    return re.sub(r"\s+", "-", heading).strip("-")
+
+
+def _heading_anchors(text: str) -> Set[str]:
+    anchors: Set[str] = set()
+    for line in text.splitlines():
+        match = _HEADING_RE.match(line)
+        if match:
+            anchors.add(_heading_slug(match.group(1)))
+    return anchors
 
 
 def _local_path(raw_target: str) -> Optional[str]:
@@ -109,6 +128,11 @@ def lint_human(
                 errors.append(f"{relative}: link escapes documentation root: {raw_target}")
                 return match.group(0)
             target_relative = target.relative_to(root).as_posix()
+            fragment = unquote(urlsplit(raw_target.strip()).fragment)
+            if fragment and target.exists() and fragment not in _heading_anchors(
+                target.read_text(encoding="utf-8")
+            ):
+                errors.append(f"{relative}: missing heading anchor: {raw_target}")
             if any(
                 part in forbidden
                 for part in Path(target_relative).parts
