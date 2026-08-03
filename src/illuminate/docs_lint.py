@@ -5,8 +5,12 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Set
 from urllib.parse import unquote, urlsplit
 
-from .document_layout import normalize_layout
-from .docs_export import _collect_files, _is_within, load_config
+from .document_layout import (
+    discover_manifests,
+    manifest_document_paths,
+    normalize_layout,
+)
+from .docs_export import _collect_files, _is_within, _readme_source, load_config
 
 DEFAULT_BANNED_TERMS = (
     "CL-",
@@ -44,6 +48,10 @@ DEFAULT_MODULE_SECTIONS = (
 )
 _LINK_RE = re.compile(r"(?<!！)(?<!\!)\[([^\]]+)\]\(([^)]+)\)")
 _HEADING_RE = re.compile(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$")
+_EXPLICIT_ANCHOR_RE = re.compile(r'<a id="([^"]+)"></a>')
+_ANCHOR_TAG_RE = re.compile(r"<a\b[^>]*>", re.IGNORECASE)
+_ID_ATTRIBUTE_RE = re.compile(r"\bid\s*=", re.IGNORECASE)
+_ANCHOR_ID_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 def _heading_slug(heading: str) -> str:
@@ -55,13 +63,42 @@ def _heading_slug(heading: str) -> str:
     return re.sub(r"\s+", "-", heading).strip("-")
 
 
-def _heading_anchors(text: str) -> Set[str]:
+def _explicit_anchor_ids(text: str) -> List[str]:
+    return [match.group(1) for match in _EXPLICIT_ANCHOR_RE.finditer(text)]
+
+
+def _explicit_anchor_issues(text: str) -> List[str]:
+    issues: List[str] = []
+    canonical_starts = {
+        match.start() for match in _EXPLICIT_ANCHOR_RE.finditer(text)
+    }
+    for tag in _ANCHOR_TAG_RE.finditer(text):
+        if _ID_ATTRIBUTE_RE.search(tag.group(0)) and tag.start() not in canonical_starts:
+            issues.append(f"invalid explicit anchor tag: {tag.group(0)}")
+
+    seen: Set[str] = set()
+    for anchor_id in _explicit_anchor_ids(text):
+        if not _ANCHOR_ID_RE.fullmatch(anchor_id):
+            issues.append(f"invalid explicit anchor id: {anchor_id}")
+        if anchor_id in seen:
+            issues.append(f"duplicate explicit anchor id: {anchor_id}")
+        seen.add(anchor_id)
+    return issues
+
+
+def _document_anchors(text: str) -> Set[str]:
     anchors: Set[str] = set()
     for line in text.splitlines():
         match = _HEADING_RE.match(line)
         if match:
             anchors.add(_heading_slug(match.group(1)))
+    for anchor_id in _explicit_anchor_ids(text):
+        if _ANCHOR_ID_RE.fullmatch(anchor_id):
+            anchors.add(anchor_id)
     return anchors
+
+
+_heading_anchors = _document_anchors
 
 
 def _local_path(raw_target: str) -> Optional[str]:
@@ -81,11 +118,9 @@ def _selected_files(root: Path, config_path: Optional[Path], all_markdown: bool)
         return sorted(root.rglob("*.md"))
     config = load_config(config_path)
     selected = _collect_files(root, config["include"], config["exclude"])
-    readme = config.get("readme")
-    if readme:
-        readme_path = (root / readme).resolve()
-        if readme_path.is_file():
-            selected.add(readme_path)
+    readme = _readme_source(root, config.get("readme"))
+    if readme is not None:
+        selected.add(readme)
     return sorted(selected, key=lambda path: path.relative_to(root).as_posix())
 
 
@@ -93,12 +128,34 @@ def _is_flat_root(relative: str, layout: Optional[dict], kind: str) -> bool:
     return bool(layout and Path(relative).parts and Path(relative).parts[0] == layout["human_roots"][kind])
 
 
-def _is_module_document(relative: str, layout: Optional[dict]) -> bool:
+def _is_module_document(
+    relative: str,
+    layout: Optional[dict],
+    module_documents: Optional[Set[str]] = None,
+) -> bool:
     if not relative.endswith(".md"):
         return False
     if layout:
-        return _is_flat_root(relative, layout, "modules")
+        if module_documents:
+            return relative in module_documents
+        return _is_flat_root(relative, layout, "modules") and Path(relative).name != "README.md"
     return relative.startswith("30-modules/") and Path(relative).name == "README.md"
+
+
+def _flat_document_roles(root: Path, layout: Optional[dict]):
+    primary: Set[str] = set()
+    auxiliary: Set[str] = set()
+    if not layout:
+        return primary, auxiliary
+    for record in discover_manifests(root, layout):
+        try:
+            documents, _ = manifest_document_paths(root, record, layout)
+        except OSError:
+            continue
+        if documents:
+            primary.add(documents[0])
+            auxiliary.update(documents[1:])
+    return primary, auxiliary
 
 
 def lint_human(
@@ -122,13 +179,18 @@ def lint_human(
         layout = normalize_layout(config)
     except ValueError as exc:
         return [str(exc)]
-    files = _selected_files(root, config_path, all_markdown)
+    try:
+        files = _selected_files(root, config_path, all_markdown)
+    except ValueError as exc:
+        return [str(exc)]
     if not files:
         return ["no Markdown files selected"]
     selected = set(files)
     errors: List[str] = []
     banned = tuple(banned_terms)
     forbidden = tuple(forbidden_paths)
+    primary_documents, auxiliary_documents = _flat_document_roles(root, layout)
+    module_documents = primary_documents | auxiliary_documents
 
     for path in files:
         relative = path.relative_to(root).as_posix()
@@ -136,6 +198,7 @@ def lint_human(
         for term in banned:
             if term in text:
                 errors.append(f"{relative}: forbidden human-doc term: {term}")
+        errors.extend(f"{relative}: {issue}" for issue in _explicit_anchor_issues(text))
 
         guide_has_module_link = False
 
@@ -161,14 +224,16 @@ def lint_human(
                 errors.append(f"{relative}: broken local link: {raw_target}")
             elif target.suffix.lower() == ".md" and target not in selected and not all_markdown:
                 errors.append(f"{relative}: Markdown link is outside export selection: {raw_target}")
-            if target.exists() and _is_module_document(target_relative, layout):
+            if target.exists() and _is_module_document(
+                target_relative, layout, module_documents
+            ):
                 guide_has_module_link = True
             return match.group(0)
 
         _LINK_RE.sub(check_link, text)
 
         if layout:
-            is_module_doc = _is_flat_root(relative, layout, "modules") and path.suffix.lower() == ".md"
+            is_module_doc = relative in primary_documents
         else:
             relative_parts = Path(relative).parts
             is_module_doc = (

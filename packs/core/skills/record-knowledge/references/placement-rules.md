@@ -22,7 +22,8 @@ document: 30-modules/example.md
 ```yaml
 - id: CL-EXAMPLE-001
   doc_refs:
-    - 30-modules/example.md#主流程摘要
+    - ref: 30-modules/example.md#主流程摘要
+      role: primary
 ```
 
 `doc_refs` 必须指向真实 Markdown 文件和存在的标题锚点。正文不直接承载 Claim ID、Evidence ID、Hash 或状态字段。

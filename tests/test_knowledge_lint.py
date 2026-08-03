@@ -107,6 +107,158 @@ class TestKnowledgeLint(unittest.TestCase):
             self.assertTrue(any("orphan human document" in error for error in errors))
             self.assertTrue(any("must be root-relative" in error for error in errors))
 
+    def test_structured_doc_refs_and_explicit_anchor_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = self._flat_root(Path(tmp))
+            module = docs / "30-modules" / "demo.md"
+            module.write_text(
+                '<a id="stable-anchor"></a>\n' + module.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            claims = docs / "70-metadata" / "modules" / "demo" / "verification" / "claims.yaml"
+            claims.write_text(
+                "- id: CL-DEMO-STRUCTURED\n"
+                "  doc_refs:\n"
+                "    - ref: 30-modules/demo.md#stable-anchor\n"
+                "      role: primary\n"
+                "    - ref: 20-components/service.md\n"
+                "      role: context\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(lint_knowledge(docs), [])
+
+    def test_structured_doc_refs_require_exactly_one_primary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = self._flat_root(Path(tmp))
+            claims = docs / "70-metadata" / "modules" / "demo" / "verification" / "claims.yaml"
+            claims.write_text(
+                "- id: CL-NO-PRIMARY\n"
+                "  doc_refs:\n"
+                "    - ref: 30-modules/demo.md\n"
+                "      role: context\n"
+                "- id: CL-TWO-PRIMARY\n"
+                "  doc_refs:\n"
+                "    - ref: 30-modules/demo.md\n"
+                "      role: primary\n"
+                "    - ref: 20-components/service.md\n"
+                "      role: primary\n"
+                "- id: CL-BAD-ROLE\n"
+                "  doc_refs:\n"
+                "    - ref: 30-modules/demo.md\n"
+                "      role: related\n",
+                encoding="utf-8",
+            )
+            errors = lint_knowledge(docs)
+            self.assertTrue(any("CL-NO-PRIMARY" in error and "exactly one" in error for error in errors))
+            self.assertTrue(any("CL-TWO-PRIMARY" in error and "exactly one" in error for error in errors))
+            self.assertTrue(any("CL-BAD-ROLE" in error and "primary or context" in error for error in errors))
+
+    def test_manifest_documents_auxiliary_file_is_owned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = self._flat_root(Path(tmp))
+            auxiliary = docs / "30-modules" / "demo-platform.md"
+            auxiliary.write_text("# Platform details\n", encoding="utf-8")
+            manifest = docs / "70-metadata" / "modules" / "demo" / "module.yaml"
+            manifest.write_text(
+                "id: demo\n"
+                "document: 30-modules/demo.md\n"
+                "documents:\n"
+                "  - 30-modules/demo-platform.md\n",
+                encoding="utf-8",
+            )
+            claims = docs / "70-metadata" / "modules" / "demo" / "verification" / "claims.yaml"
+            claims.write_text(
+                "- id: CL-AUX-001\n"
+                "  doc_refs:\n"
+                "    - ref: 30-modules/demo-platform.md\n"
+                "      role: primary\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(lint_knowledge(docs), [])
+
+    def test_doc_refs_accept_field_order_comments_and_inline_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = self._flat_root(Path(tmp))
+            claims = docs / "70-metadata" / "modules" / "demo" / "verification" / "claims.yaml"
+            claims.write_text(
+                "- id: CL-YAML-001 # stable id\n"
+                "  doc_refs:\n"
+                "    - role: primary # primary owner\n"
+                "      ref: 30-modules/demo.md#主流程摘要\n"
+                "    - {role: context, ref: 20-components/service.md} # context\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(lint_knowledge(docs), [])
+
+    def test_doc_refs_reject_non_markdown_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = self._flat_root(Path(tmp))
+            text_file = docs / "20-components" / "service.txt"
+            text_file.write_text("service context\n", encoding="utf-8")
+            claims = docs / "70-metadata" / "modules" / "demo" / "verification" / "claims.yaml"
+            claims.write_text(
+                "- id: CL-TXT-001\n"
+                "  doc_refs:\n"
+                "    - ref: 30-modules/demo.md\n"
+                "      role: primary\n"
+                "    - ref: 20-components/service.txt\n"
+                "      role: context\n",
+                encoding="utf-8",
+            )
+            errors = lint_knowledge(docs)
+            self.assertTrue(any("must target Markdown" in error for error in errors))
+
+    def test_url_encoded_explicit_anchor_reference_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = self._flat_root(Path(tmp))
+            module = docs / "30-modules" / "demo.md"
+            module.write_text('<a id="stable-anchor"></a>\n# Demo\n', encoding="utf-8")
+            claims = docs / "70-metadata" / "modules" / "demo" / "verification" / "claims.yaml"
+            claims.write_text(
+                "- id: CL-ENCODED-001\n"
+                "  doc_refs:\n"
+                "    - ref: 30-modules/demo.md#stable%2Danchor\n"
+                "      role: primary\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(lint_knowledge(docs), [])
+
+    def test_manifest_id_must_match_entity_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = self._flat_root(Path(tmp))
+            manifest = docs / "70-metadata" / "modules" / "demo" / "module.yaml"
+            manifest.write_text(
+                "id: another-module\n"
+                "document: 30-modules/demo.md\n",
+                encoding="utf-8",
+            )
+            errors = lint_knowledge(docs)
+            self.assertTrue(any("does not match entity directory demo" in error for error in errors))
+
+    def test_readme_anchor_participates_in_global_uniqueness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = self._flat_root(Path(tmp))
+            (docs / "README-HUMAN.md").write_text(
+                '<a id="same-anchor"></a>\n# Human\n', encoding="utf-8"
+            )
+            (docs / "30-modules" / "demo.md").write_text(
+                '<a id="same-anchor"></a>\n# Demo\n', encoding="utf-8"
+            )
+            errors = lint_knowledge(docs)
+            self.assertTrue(any("duplicate explicit anchor id same-anchor" in error for error in errors))
+
+    def test_explicit_anchor_must_be_unique_across_documents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = self._flat_root(Path(tmp))
+            (docs / "30-modules" / "demo.md").write_text(
+                '<a id="same-anchor"></a>\n# Demo\n', encoding="utf-8"
+            )
+            (docs / "20-components" / "service.md").write_text(
+                '<a id="same-anchor"></a>\n# Service\n', encoding="utf-8"
+            )
+            errors = lint_knowledge(docs)
+            self.assertTrue(any("duplicate explicit anchor id same-anchor" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()

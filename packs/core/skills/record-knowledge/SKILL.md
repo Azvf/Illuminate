@@ -27,7 +27,8 @@ document: 30-modules/hot-update.md
 
 ```yaml
 doc_refs:
-  - 30-modules/hot-update.md#主流程摘要
+  - ref: 30-modules/hot-update.md#主流程摘要
+    role: primary
 ```
 
 正文不写机器 ID、状态、Hash 或审计结果。
@@ -67,7 +68,7 @@ $record-knowledge 记录 Manifest 配置来源和覆盖关系
 
 ### 4. 只写已验证事实
 
-每条信息应能追溯到代码、配置、调用关系、日志、测试、构建脚本或现有稳定文档。YAML 条目通过 root-relative `doc_refs` 指向正文标题，不记录易失效行号。
+每条信息应能追溯到代码、配置、调用关系、日志、测试、构建脚本或现有稳定文档。YAML 条目通过带 `role: primary|context` 的 root-relative `doc_refs` 指向正文标题；每条 Claim、Gap、Test 恰好一个 `primary`，不记录易失效行号。
 
 ### 5. 最小化更新
 

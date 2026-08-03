@@ -46,10 +46,9 @@ Manifest 文件位于 `docs/70-metadata/components/<id>/component.yaml` 或 `mod
 
 - `components/<id>/component.yaml`
 - `modules/<id>/module.yaml`
-- `journeys/<id>/journey.yaml`
 - 各实体目录下的 `verification/claims.yaml`、`gaps.yaml`、`tests.yaml`、`evidence.yaml` 和 source anchors
 
-Claim、Gap、Test 等条目通过 root-relative `doc_refs` 指向正文文件和标题锚点。机器 ID、证据状态、Hash、测试记录和版本绑定信息不复制到人类 Markdown。
+Claim、Gap、Test 等条目通过 root-relative `doc_refs` 指向正文文件和标题锚点；每条记录必须恰好一个 `primary`，可有零到多个 `context`。模块主 Manifest 的 `document` 是主正文，`documents` 是同一模块拥有的平台补充正文。稳定显式锚点使用 `<a id="[a-z0-9]+(?:-[a-z0-9]+)*"></a>`，且知识库内唯一。机器 ID、证据状态、Hash、测试记录和版本绑定信息不复制到人类 Markdown。
 
 ## Owner 规则
 

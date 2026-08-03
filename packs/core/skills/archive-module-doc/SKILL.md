@@ -15,7 +15,7 @@ description: Organize verified knowledge for one module into a compact, standard
 30-modules/<module>.md
 ```
 
-实际文件必须由 `70-metadata/modules/<id>/module.yaml` 的 `document` 字段声明。Claim、Gap、Test 和 Evidence 位于同一实体的 `70-metadata/modules/<id>/verification/`，通过 root-relative `doc_refs` 指向正文标题。
+实际文件必须由 `70-metadata/modules/<id>/module.yaml` 的 `document` 字段声明；同一 Manifest 可通过 `documents` 声明平台补充正文。Claim、Gap、Test 和 Evidence 位于同一实体的 `70-metadata/modules/<id>/verification/`，通过带 `role: primary|context` 的 root-relative `doc_refs` 指向正文标题。
 
 建议章节：
 

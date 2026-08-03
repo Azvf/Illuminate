@@ -6,6 +6,7 @@ a manifest and copies them while preserving their relative paths.
 """
 
 import json
+import re
 import shutil
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -52,6 +53,20 @@ def _validate_patterns(patterns: Iterable[str], field: str) -> List[str]:
     return result
 
 
+def _validate_readme_config(readme: Optional[str]) -> Optional[str]:
+    if readme is None:
+        return None
+    normalized = readme.replace("\\", "/")
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or re.match(r"^[A-Za-z]:/", normalized)
+        or ".." in normalized.split("/")
+    ):
+        raise DocsExportError(f"unsafe readme path: {readme}")
+    return normalized
+
+
 def load_config(config_path: Optional[Path]) -> Dict[str, object]:
     """Load and validate a JSON human-doc export configuration."""
     if config_path is None:
@@ -84,7 +99,7 @@ def load_config(config_path: Optional[Path]) -> Dict[str, object]:
     return {
         "include": _validate_patterns(include, "include"),
         "exclude": _validate_patterns(exclude, "exclude"),
-        "readme": readme.replace("\\", "/") if readme else None,
+        "readme": _validate_readme_config(readme),
         "layout": layout,
     }
 

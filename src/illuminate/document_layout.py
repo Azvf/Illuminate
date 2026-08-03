@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlsplit
 
 FLAT_CLASSIFIED = "flat-classified"
@@ -16,7 +16,23 @@ _MANIFEST_FILES = {
     "components": "component.yaml",
     "modules": "module.yaml",
 }
-_SCALAR_RE = re.compile(r"^\s*(?:id|document)\s*:\s*(.*?)\s*(?:#.*)?$")
+_SCALAR_RE = re.compile(r"^(?P<indent>\s*)(?P<key>id|document)\s*:\s*(?P<value>.*?)\s*(?:#.*)?$")
+_LIST_ITEM_RE = re.compile(r"^(?P<indent>\s*)-\s+(?P<value>.*?)\s*$")
+
+
+def _strip_yaml_comment(value: str) -> str:
+    quote = None
+    for index, character in enumerate(value):
+        if character in ("'", '"'):
+            if quote == character:
+                quote = None
+            elif quote is None:
+                quote = character
+        elif character == "#" and quote is None and (
+            index == 0 or value[index - 1].isspace()
+        ):
+            return value[:index].rstrip()
+    return value.strip()
 
 
 class LayoutError(ValueError):
@@ -26,17 +42,24 @@ class LayoutError(ValueError):
 def normalize_layout(config: Optional[dict]) -> Optional[dict]:
     """Return the validated layout profile from a human-doc config."""
     config = config or {}
-    name = config.get("layout")
-    if name is None:
+    name_value = config.get("layout")
+    if name_value is None:
         return None
-    if isinstance(name, dict):
-        if name.get("name") != FLAT_CLASSIFIED:
-            raise LayoutError(f"unsupported documentation layout: {name}")
-        return name
+    if isinstance(name_value, dict):
+        layout_config = name_value
+        name = layout_config.get("name")
+    else:
+        layout_config = config
+        name = name_value
     if name != FLAT_CLASSIFIED:
-        raise LayoutError(f"unsupported documentation layout: {name}")
+        raise LayoutError(f"unsupported documentation layout: {name_value}")
 
-    human_roots = config.get("human_roots", DEFAULT_HUMAN_ROOTS)
+    def option(key: str, default):
+        if key in layout_config:
+            return layout_config[key]
+        return config.get(key, default)
+
+    human_roots = option("human_roots", DEFAULT_HUMAN_ROOTS)
     if not isinstance(human_roots, dict):
         raise LayoutError("human_roots must be an object")
     roots = dict(DEFAULT_HUMAN_ROOTS)
@@ -51,7 +74,7 @@ def normalize_layout(config: Optional[dict]) -> Optional[dict]:
             raise LayoutError(f"unsafe human root: {value}")
         roots[kind] = normalized
 
-    metadata_root = config.get("metadata_root", DEFAULT_METADATA_ROOT)
+    metadata_root = option("metadata_root", DEFAULT_METADATA_ROOT)
     if not isinstance(metadata_root, str) or not metadata_root.strip():
         raise LayoutError("metadata_root must be a non-empty string")
     metadata_root = metadata_root.replace("\\", "/").strip("/")
@@ -62,11 +85,27 @@ def normalize_layout(config: Optional[dict]) -> Optional[dict]:
     if metadata_root in roots.values():
         raise LayoutError("metadata_root must differ from human roots")
 
-    doc_refs = config.get("doc_refs", "root-relative")
+    root_parts = {kind: tuple(value.split("/")) for kind, value in roots.items()}
+    for kind, parts in root_parts.items():
+        for other_kind, other_parts in root_parts.items():
+            if kind != other_kind and (
+                parts[: len(other_parts)] == other_parts
+                or other_parts[: len(parts)] == parts
+            ):
+                raise LayoutError("human roots must not overlap or nest")
+    metadata_parts = tuple(metadata_root.split("/"))
+    if any(
+        metadata_parts[: len(parts)] == parts
+        or parts[: len(metadata_parts)] == metadata_parts
+        for parts in root_parts.values()
+    ):
+        raise LayoutError("metadata_root must not overlap or nest human roots")
+
+    doc_refs = option("doc_refs", "root-relative")
     if doc_refs != "root-relative":
         raise LayoutError("flat-classified doc_refs must be root-relative")
 
-    require_manifests = config.get("require_manifests", True)
+    require_manifests = option("require_manifests", True)
     if not isinstance(require_manifests, bool):
         raise LayoutError("require_manifests must be a boolean")
 
@@ -107,45 +146,120 @@ def discover_manifests(docs_root: Path, layout: dict) -> List[dict]:
     return manifests
 
 
-def manifest_fields(path: Path) -> Dict[str, Optional[str]]:
-    """Read the simple id/document scalar fields needed from a manifest."""
-    fields: Dict[str, Optional[str]] = {"id": None, "document": None}
+def _unquote(value: str) -> str:
+    value = value.strip()
+    if value.startswith(("'", '"')) and value[-1:] == value[0]:
+        return value[1:-1]
+    return value
+
+
+def manifest_fields(path: Path) -> Dict[str, object]:
+    """Read the manifest identity, primary document, and auxiliary documents."""
+    fields: Dict[str, object] = {"id": None, "document": None, "documents": []}
+    in_documents = False
+    documents_indent = -1
     for raw_line in Path(path).read_text(encoding="utf-8").splitlines():
-        match = _SCALAR_RE.match(raw_line)
-        if not match:
+        scalar = _SCALAR_RE.match(raw_line)
+        if scalar:
+            key = scalar.group("key")
+            if fields[key] is None:
+                fields[key] = _unquote(_strip_yaml_comment(scalar.group("value"))) or None
+            in_documents = False
             continue
-        key = raw_line.strip().split(":", 1)[0]
-        value = match.group(1).strip()
-        if value.startswith(("'", '"')) and value[-1:] == value[0]:
-            value = value[1:-1]
-        if key in fields and fields[key] is None:
-            fields[key] = value or None
+
+        stripped = raw_line.strip()
+        documents_match = re.match(r"^documents\s*:\s*(.*?)\s*$", stripped)
+        if documents_match:
+            documents_indent = len(raw_line) - len(raw_line.lstrip())
+            inline = _strip_yaml_comment(documents_match.group(1))
+            if inline.startswith("[") and inline.endswith("]"):
+                fields["documents"] = [
+                    _unquote(_strip_yaml_comment(item))
+                    for item in inline[1:-1].split(",")
+                    if item.strip()
+                ]
+                in_documents = False
+            else:
+                fields["documents"] = []
+                in_documents = True
+            continue
+
+        if in_documents:
+            item = _LIST_ITEM_RE.match(raw_line)
+            if item and len(item.group("indent")) > documents_indent:
+                value = _unquote(_strip_yaml_comment(item.group("value")))
+                if value:
+                    fields["documents"].append(value)
+                continue
+            if stripped and len(raw_line) - len(raw_line.lstrip()) <= documents_indent:
+                in_documents = False
     return fields
 
 
+def manifest_document_paths(
+    docs_root: Path, record: dict, layout: dict
+) -> Tuple[List[str], List[str]]:
+    """Return ``(owned_documents, errors)`` for one owner manifest."""
+    fields = manifest_fields(record["path"])
+    primary = fields["document"]
+    auxiliary = fields["documents"]
+    errors: List[str] = []
+    manifest_id = fields["id"]
+    if not manifest_id:
+        errors.append("missing id")
+    elif manifest_id != record["id"]:
+        errors.append(
+            f"id does not match entity directory {record['id']}: {manifest_id}"
+        )
+    if not primary:
+        errors.append("missing document")
+        return [], errors
+    if not isinstance(auxiliary, list):
+        errors.append("documents must be a list")
+        auxiliary = []
+
+    documents: List[str] = []
+    for label, document in [("document", primary)] + [
+        ("documents", value) for value in auxiliary
+    ]:
+        if not isinstance(document, str) or not document:
+            errors.append(f"{label} contains an empty path")
+            continue
+        if not is_root_relative_path(document, layout):
+            errors.append(f"{label} must be root-relative: {document}")
+            continue
+        expected_root = layout["human_roots"][record["kind"]]
+        if Path(document).parts[0] != expected_root:
+            errors.append(f"{label} is outside {expected_root}: {document}")
+            continue
+        resolved = (Path(docs_root) / document).resolve()
+        docs_root_resolved = Path(docs_root).resolve()
+        try:
+            resolved.relative_to(docs_root_resolved)
+        except ValueError:
+            errors.append(f"{label} escapes documentation root: {document}")
+            continue
+        if resolved.suffix.lower() != ".md":
+            errors.append(f"{label} must be Markdown: {document}")
+            continue
+        if not resolved.is_file():
+            errors.append(f"{label} not found: {document}")
+            continue
+        if document in documents:
+            errors.append(f"duplicate owned document: {document}")
+            continue
+        documents.append(document)
+    return documents, errors
+
+
 def manifest_document_path(docs_root: Path, record: dict, layout: dict) -> tuple:
-    """Return ``(document, error)`` for a discovered owner manifest."""
-    path = record["path"]
-    fields = manifest_fields(path)
-    document = fields["document"]
-    if not document:
-        return None, "missing document"
-    if not is_root_relative_path(document, layout):
-        return None, f"document must be root-relative: {document}"
-    expected_root = layout["human_roots"][record["kind"]]
-    if Path(document).parts[0] != expected_root:
-        return None, f"document is outside {expected_root}: {document}"
-    resolved = (Path(docs_root) / document).resolve()
-    docs_root = Path(docs_root).resolve()
-    try:
-        resolved.relative_to(docs_root)
-    except ValueError:
-        return None, f"document escapes documentation root: {document}"
-    if resolved.suffix.lower() != ".md":
-        return None, f"document must be Markdown: {document}"
-    if not resolved.is_file():
-        return None, f"document not found: {document}"
-    return document, None
+    """Return ``(primary_document, error)`` for compatibility."""
+    fields = manifest_fields(record["path"])
+    documents, errors = manifest_document_paths(docs_root, record, layout)
+    primary = fields["document"]
+    if errors:
+        return None, "; ".join(errors)
+    return primary if documents else None, None
 
 
 def resolve_root_relative_ref(ref: str, docs_root: Path, layout: dict) -> Optional[Path]:

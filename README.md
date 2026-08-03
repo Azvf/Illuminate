@@ -79,7 +79,7 @@ Keep human-readable Markdown as the source truth and store claims, evidence, and
 | `illuminate run --pack <dir> --repo <path> --dry-run` | Materialize and print launch command without executing |
 | `illuminate evidence audit --repo <path>` | Run evidence audit |
 | `illuminate docs export-human --source <dir> --output <dir> [--config <json>]` | Copy configured human-readable Markdown without rewriting content |
-| `illuminate docs lint-human --source <dir> [--config <json>]` | Check human Markdown rules and local links |
+| `illuminate docs lint-human --source <dir> [--config <json>] [--all-markdown]` | Check human Markdown rules and local links |
 | `illuminate compat generate [--pack <dir>]` | Generate legacy compatibility dirs from canonical sources |
 | `illuminate compat check [--pack <dir>]` | Check compatibility dirs match canonical sources (files + SHA-256) |
 | `illuminate sync codex --repo <path> [--pack <dir>] [--skill <id>...]` | Sync pack into target repo for Codex App |

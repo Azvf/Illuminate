@@ -18,8 +18,8 @@ Commands:
     illuminate knowledge status --repo <path> [--store <dir>] [--manifest <json>]
     illuminate knowledge push --repo <path> [--store <dir>] [--manifest <json>] [--force]
     illuminate docs export-human --source <dir> --output <dir> [--config <json>]
-    illuminate docs lint-human --source <dir> [--config <json>]
-    illuminate docs lint-knowledge --source <dir>
+    illuminate docs lint-human --source <dir> [--config <json>] [--all-markdown]
+    illuminate docs lint-knowledge --source <dir> [--config <json>]
 """
 
 import argparse
@@ -40,6 +40,7 @@ from .sync_codebuddy import sync_codebuddy, check_sync as check_codebuddy_sync, 
 from .knowledge_store import knowledge_pull, knowledge_status, knowledge_push
 from .docs_export import export_human, DocsExportError
 from .docs_lint import format_lint_errors, lint_human
+from .knowledge_lint import format_knowledge_lint_errors, lint_knowledge
 
 
 _SESSION_BASE = Path.home() / ".illuminate" / "sessions"
@@ -174,6 +175,7 @@ def _build_parser():
     dl.add_argument("--all-markdown", action="store_true", help="Lint every Markdown file below source")
     dk = ps.add_parser("lint-knowledge", help="Lint knowledge metadata and doc_refs")
     dk.add_argument("--source", required=True, help="Documentation root")
+    dk.add_argument("--config", default=None, help="JSON config path")
 
     return parser
 
@@ -687,9 +689,14 @@ def main():
         parser.print_help(sys.stderr)
         return 1
 
-    key = (args.command, getattr(args, args.command + "_command", None))
+    nested_command = getattr(args, args.command + "_command", None)
+    key = (args.command,) if nested_command is None else (args.command, nested_command)
     handler = _DISPATCH.get(key)
     if handler:
         return handler(args)
 
-    pass
+    if nested_command is None:
+        print(f"Error: command '{args.command}' requires a subcommand.", file=sys.stderr)
+    else:
+        print(f"Error: unsupported command: {' '.join(key)}", file=sys.stderr)
+    return 2
