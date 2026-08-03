@@ -16,7 +16,7 @@
         "remote": { "type": "string" }
       }
     },
-    "harness": { "type": "string", "enum": ["claude-code", "codex"] },
+    "harness": { "type": "string", "const": "claude-code" },
     "packs": {
       "type": "array",
       "items": {

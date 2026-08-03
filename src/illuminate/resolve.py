@@ -103,7 +103,6 @@ def resolve_exposed_skills(
 def create_mount_plan(
     pack_dir: Path,
     repo: str,
-    harness: str = "claude-code",
     skill_filter: List[str] = None,
 ) -> dict:
     """Create a mount plan from a pack directory.
@@ -111,7 +110,6 @@ def create_mount_plan(
     Args:
         pack_dir: Path to the pack root (containing pack.json).
         repo: Target repository path.
-        harness: Target harness name.
         skill_filter: Optional list of skill ids to expose.
             If None, all non-alias skills are exposed.
             Aliases are resolved to their targets.
@@ -141,7 +139,7 @@ def create_mount_plan(
         "schema_version": 1,
         "session_id": str(uuid.uuid4()),
         "repo": repo_info,
-        "harness": harness,
+        "harness": "claude-code",
         "packs": [
             {
                 "id": manifest["id"],
@@ -160,7 +158,6 @@ def create_mount_plan(
 def resolve_file_list(
     pack_dir: Path,
     mount_plan: dict,
-    skill_mount_base: str = ".claude/skills",
 ) -> List[Dict[str, str]]:
     """Resolve the complete list of files to mount for a plan.
 
@@ -173,10 +170,7 @@ def resolve_file_list(
 
     Args:
         pack_dir: Path to the pack root.
-        mount_plan: The mount plan dict.
-        skill_mount_base: Destination directory for skill files
-                          (default ".claude/skills" for Claude,
-                           ".agents/skills" for Codex).
+        mount_plan: The Claude Code mount plan dict.
     """
     manifest = load_pack_manifest(pack_dir)
     policy_index = load_policy_index(pack_dir, manifest)
@@ -208,7 +202,7 @@ def resolve_file_list(
                 rel = file_path.relative_to(skill_dir)
                 files.append({
                     "source": str(file_path),
-                    "dest": f"{skill_mount_base}/{skill_name}/{rel}",
+                    "dest": f".claude/skills/{skill_name}/{rel}",
                     "kind": "skill",
                 })
 

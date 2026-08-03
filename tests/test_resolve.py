@@ -17,7 +17,7 @@ CORE_PACK = REPO_ROOT / "packs" / "core"
 class TestResolve(unittest.TestCase):
 
     def test_create_mount_plan(self):
-        plan = create_mount_plan(CORE_PACK, "/test/repo", "claude-code")
+        plan = create_mount_plan(CORE_PACK, "/test/repo")
         self.assertEqual(plan["schema_version"], 1)
         # repo is now a dict with resolved path
         self.assertIn("path", plan["repo"])

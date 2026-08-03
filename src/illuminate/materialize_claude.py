@@ -136,7 +136,7 @@ def _gather_permissions(mount_plan, contracts) -> dict:
     }
 
 
-def materialize_session(pack_dir, repo, harness="claude-code", skill_filter=None):
+def materialize_session(pack_dir, repo, skill_filter=None):
     """Materialize a Claude Code session from a pack.
 
     Creates a session directory under ~/.illuminate/sessions/<session-id>/
@@ -158,7 +158,7 @@ def materialize_session(pack_dir, repo, harness="claude-code", skill_filter=None
             + "\n".join(errors)
         )
 
-    mount_plan = create_mount_plan(pack_dir, repo, harness, skill_filter)
+    mount_plan = create_mount_plan(pack_dir, repo, skill_filter)
     session_id = mount_plan["session_id"]
     session_dir = _get_session_base() / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
