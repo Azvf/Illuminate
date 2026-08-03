@@ -77,9 +77,10 @@ Keep human-readable Markdown as the source truth and store claims, evidence, and
 | `illuminate sync codebuddy --repo <path> [--pack <dir>] [--skill <id>...]` | Sync pack into target repo for CodeBuddy |
 | `illuminate sync check --repo <path> [--harness codex\|codebuddy]` | Verify sync integrity |
 | `illuminate sync clean --repo <path> [--harness codex\|codebuddy]` | Remove Illuminate-synced artifacts |
-| `illuminate knowledge pull --repo <path> [--store <dir>]` | Pull project knowledge to central store |
-| `illuminate knowledge status --repo <path> [--store <dir>]` | Compare project knowledge with central store |
-| `illuminate knowledge push --repo <path> [--store <dir>] [--force]` | Push store documents back to project |
+| `illuminate knowledge pull --repo <path> [--store <dir>] [--manifest <json>]` | Pull configured project knowledge to central store |
+| `illuminate knowledge status --repo <path> [--store <dir>] [--manifest <json>]` | Compare configured project knowledge with central store |
+| `illuminate knowledge push --repo <path> [--store <dir>] [--manifest <json>] [--force]` | Push store documents back to project safely |
+| `illuminate docs lint-knowledge --source <dir>` | Validate metadata IDs and YAML `doc_refs` |
 
 ### Skill Selection
 
@@ -160,10 +161,23 @@ Does NOT modify project-owned `.codebuddy` content. See `sync_codebuddy.py` for 
 
 ## Knowledge Store
 
-Pull project knowledge docs from `docs/Guidelines/` and `docs/Framework/` to a central store:
+Knowledge Store is a local backup and recovery tool. Add an optional `knowledge-manifest.json` at the repository root when the project needs roots beyond `docs/Guidelines/` and `docs/Framework/`; its roots and patterns are relative to `docs/`:
+
+```json
+{
+  "roots": ["20-components", "30-modules", "40-journeys", "README-HUMAN.md", "human-docs.json"],
+  "include": ["**/*"],
+  "exclude": ["80-evidence/**", "90-generated/**", "99-archive/**", "dist/**"]
+}
+```
+
+Without a manifest, only `Guidelines` and `Framework` are tracked. The store keeps documents and a hash baseline under `~/.illuminate/knowledge`; Git remains responsible for history, branches, and collaboration.
 
 ```bash
-illuminate knowledge pull --repo /path/to/project
-illuminate knowledge status --repo /path/to/project
-illuminate knowledge push --repo /path/to/project
+illuminate knowledge pull --repo /path/to/project --manifest /path/to/project/knowledge-manifest.json
+illuminate knowledge status --repo /path/to/project --manifest /path/to/project/knowledge-manifest.json
+illuminate knowledge push --repo /path/to/project --manifest /path/to/project/knowledge-manifest.json
+illuminate docs lint-knowledge --source /path/to/project/docs
 ```
+
+Pull keeps the previous three-way baseline for conflicts and deletions. Push refuses to overwrite a project file that changed since the last baseline unless `--force` is supplied.

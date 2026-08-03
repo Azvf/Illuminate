@@ -1,403 +1,324 @@
-"""Knowledge store: pull project knowledge docs to central storage, check status, push back.
+"""Local knowledge backup with change detection and protected recovery.
 
-Central storage structure:
-  ~/.illuminate/knowledge/
-  └── projects/
-      └── <project-id>/
-          ├── project.json          (project metadata + last_synced_commit)
-          ├── knowledge-lock.json   (file hashes with last_synced_hash)
-          └── documents/
-              ├── Guidelines/
-              │   ├── paths.md
-              │   └── ...
-              └── Framework/
-                  ├── background-download.md
-                  └── ...
+The store keeps one copy of configured knowledge documents outside the repository:
 
-Conflict detection uses three-way comparison:
-  last_synced_hash  — hash when last pulled
-  project_hash      — current hash in project docs/Guidelines/ or docs/Framework/
-  store_hash        — current hash in store documents/
+    ~/.illuminate/knowledge/projects/<project-id>/
+        knowledge-lock.json
+        documents/...
 
-  project_hash != last_synced_hash AND store_hash == last_synced_hash → pull allowed
-  project_hash != last_synced_hash AND store_hash != last_synced_hash → conflict
+Git remains the source of version history. This module only provides a local
+backup, status comparison, and explicit recovery path.
 """
 
+import fnmatch
+import hashlib
 import json
 import shutil
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
-from .hashutil import hash_file, hash_directory, lock_hash
+from .hashutil import hash_file
 
-
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
 
 _DEFAULT_STORE = Path.home() / ".illuminate" / "knowledge"
+_DEFAULT_KNOWLEDGE_MANIFEST = {
+    "roots": ["Guidelines", "Framework"],
+    "include": ["**/*"],
+    "exclude": [],
+}
 
 
 def _get_store(store: Optional[Path] = None) -> Path:
-    return store or _DEFAULT_STORE
+    return Path(store) if store is not None else _DEFAULT_STORE
 
 
 def _project_dir(store: Path, project_id: str) -> Path:
     return store / "projects" / project_id
 
 
-# ---------------------------------------------------------------------------
-# Project helpers
-# ---------------------------------------------------------------------------
-
 def _derive_project_id(repo_root: Path) -> str:
-    """Derive a stable project ID from the repo root name."""
-    return repo_root.name.lower().replace(" ", "-")
+    """Use the repository name plus its absolute path identity."""
+    name = repo_root.name.lower().replace(" ", "-") or "project"
+    path_hash = hashlib.sha256(str(repo_root.resolve()).encode("utf-8")).hexdigest()[:12]
+    return f"{name}-{path_hash}"
 
 
-def _discover_knowledge_files(repo_root: Path) -> Dict[str, Path]:
-    """Discover all files under docs/Guidelines/ and docs/Framework/ in the repo.
+def _knowledge_manifest(repo_root: Path, manifest_path: Optional[Path] = None) -> dict:
+    candidates = []
+    if manifest_path is not None:
+        candidates.append(Path(manifest_path))
+    candidates.extend([
+        repo_root / "knowledge-manifest.json",
+        repo_root / "docs" / "knowledge-manifest.json",
+    ])
+    for candidate in candidates:
+        if candidate.is_file():
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(f"invalid knowledge manifest: {candidate}: {exc}") from exc
+            if not isinstance(data, dict):
+                raise ValueError(f"knowledge manifest must be an object: {candidate}")
+            return data
+    return dict(_DEFAULT_KNOWLEDGE_MANIFEST)
 
-    Returns {relative_posix_path: absolute_path}.
-    """
+
+def _discover_knowledge_files(
+    repo_root: Path,
+    manifest_path: Optional[Path] = None,
+) -> Dict[str, Path]:
+    """Return configured files keyed by paths relative to ``docs/``."""
+    docs_root = (repo_root / "docs").resolve()
+    manifest = _knowledge_manifest(repo_root, manifest_path)
+    roots = manifest.get("roots", _DEFAULT_KNOWLEDGE_MANIFEST["roots"])
+    include = manifest.get("include", ["**/*"])
+    exclude = manifest.get("exclude", [])
+    if not all(isinstance(value, list) for value in (roots, include, exclude)):
+        raise ValueError("knowledge manifest roots/include/exclude must be arrays")
+
     result: Dict[str, Path] = {}
-    for subdir in ("Guidelines", "Framework"):
-        knowledge_root = repo_root / "docs" / subdir
-        if knowledge_root.exists():
-            for f in sorted(knowledge_root.rglob("*")):
-                if f.is_file():
-                    rel = f.relative_to(knowledge_root).as_posix()
-                    result[f"{subdir}/{rel}"] = f
+    for root in roots:
+        root_path = (docs_root / root).resolve()
+        try:
+            root_path.relative_to(docs_root)
+        except ValueError as exc:
+            raise ValueError(f"knowledge root escapes docs/: {root}") from exc
+
+        if root_path.is_file():
+            candidates = [root_path]
+        elif root_path.is_dir():
+            candidates = [
+                path
+                for pattern in include
+                for path in root_path.glob(pattern)
+            ]
+        else:
+            continue
+
+        for file_path in candidates:
+            if not file_path.is_file():
+                continue
+            rel = file_path.relative_to(docs_root).as_posix()
+            if any(fnmatch.fnmatchcase(rel, pattern) for pattern in exclude):
+                continue
+            result[rel] = file_path
     return result
 
 
-def _read_project_json(project_dir: Path) -> dict:
-    """Read project.json or return a default."""
-    pj_path = project_dir / "project.json"
-    if pj_path.exists():
-        return json.loads(pj_path.read_text(encoding="utf-8"))
-    return {}
-
-
-def _read_knowledge_lock(project_dir: Path) -> dict:
-    """Read knowledge-lock.json or return an empty lock."""
+def _read_lock(project_dir: Path) -> dict:
     lock_path = project_dir / "knowledge-lock.json"
-    if lock_path.exists():
-        return json.loads(lock_path.read_text(encoding="utf-8"))
-    return {"files": [], "last_synced_hash": {}}
-
-
-# ---------------------------------------------------------------------------
-# Pull: project → store
-# ---------------------------------------------------------------------------
-
-def knowledge_pull(
-    repo_root: Path,
-    store: Optional[Path] = None,
-) -> dict:
-    """Pull project knowledge docs from repo to central store.
-
-    Returns a summary dict with new/modified/deleted/conflicted file lists.
-    """
-    repo_root = Path(repo_root).resolve()
-    project_id = _derive_project_id(repo_root)
-    store_path = _get_store(store)
-    project_dir = _project_dir(store_path, project_id)
-
-    knowledge_files = _discover_knowledge_files(repo_root)
-
-    # Load previous state
-    project_info = _read_project_json(project_dir)
-    lock = _read_knowledge_lock(project_dir)
-
-    # Build hash maps from lock
-    locked_hashes: Dict[str, str] = {}
-    for entry in lock.get("files", []):
-        locked_hashes[entry["path"]] = entry.get("sha256", "")
-    locked_verified: Dict[str, str] = {}
-    for entry in lock.get("files", []):
-        locked_verified[entry["path"]] = entry.get("verified_commit", "")
-
-    # Current project file hashes
-    project_hashes: Dict[str, str] = {}
-    for rel, fpath in knowledge_files.items():
-        project_hashes[rel] = hash_file(fpath)
-
-    # Current store file hashes
-    store_hashes: Dict[str, str] = {}
-    store_docs_dir = project_dir / "documents"
-    if store_docs_dir.exists():
-        for f in sorted(store_docs_dir.rglob("*")):
-            if f.is_file():
-                rel = f.relative_to(store_docs_dir).as_posix()
-                store_hashes[rel] = hash_file(f)
-
-    new_files: List[str] = []
-    modified_files: List[str] = []
-    deleted_files: List[str] = []
-    conflicted_files: List[str] = []
-    pulled_files: List[str] = []
-
-    all_paths = set(list(project_hashes.keys()) + list(locked_hashes.keys()) + list(store_hashes.keys()))
-
-    for rel in sorted(all_paths):
-        project_hash = project_hashes.get(rel)
-        store_hash = store_hashes.get(rel)
-        last_synced = locked_hashes.get(rel)
-
-        if project_hash is None:
-            # File deleted in project
-            deleted_files.append(rel)
-            continue
-
-        if store_hash is None and last_synced is None:
-            # New file, not in store
-            new_files.append(rel)
-            pulled_files.append(rel)
-            continue
-
-        if project_hash != last_synced and (store_hash == last_synced or store_hash is None):
-            # Project changed, store unchanged → safe to pull
-            modified_files.append(rel)
-            pulled_files.append(rel)
-            continue
-
-        if project_hash != last_synced and store_hash != last_synced and store_hash != project_hash:
-            # Both sides changed → conflict
-            conflicted_files.append(rel)
-            continue
-
-        if project_hash == store_hash:
-            # Already in sync
-            continue
-
-        # Fallback: store has something project doesn't (or they match via last_synced)
-        if last_synced is None:
-            pulled_files.append(rel)
-
-    # Do the actual copy for pulled files
-    if pulled_files:
-        store_docs_dir.mkdir(parents=True, exist_ok=True)
-        for rel in pulled_files:
-            src = knowledge_files[rel]
-            dest = store_docs_dir / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
-
-    # Build new lock with all current project file hashes
-    new_file_entries = []
-    for rel, fpath in knowledge_files.items():
-        new_file_entries.append({
-            "path": rel,
-            "sha256": hash_file(fpath),
-            "verified_commit": "",
-        })
-
-    # Get git HEAD for last_synced_commit
-    import subprocess
+    if not lock_path.exists():
+        return {"files": []}
     try:
-        head = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(repo_root), stderr=subprocess.DEVNULL, text=True,
-        ).strip()
-    except Exception:
-        head = ""
+        data = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid knowledge lock: {lock_path}: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("files", []), list):
+        raise ValueError(f"invalid knowledge lock: {lock_path}")
+    return data
 
-    # Update project.json
-    repo_remote = ""
-    try:
-        repo_remote = subprocess.check_output(
-            ["git", "remote", "get-url", "origin"],
-            cwd=str(repo_root), stderr=subprocess.DEVNULL, text=True,
-        ).strip()
-    except Exception:
-        pass
 
-    project_info.update({
-        "schema_version": 1,
-        "project_id": project_id,
-        "display_name": repo_root.name,
-        "repository": {
-            "remote": repo_remote,
-            "default_branch": "main",
-        },
-        "knowledge_root": "docs/Guidelines + docs/Framework",
-        "last_synced_commit": head,
-        "last_synced_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    })
-
-    project_dir.mkdir(parents=True, exist_ok=True)
-    (project_dir / "project.json").write_text(
-        json.dumps(project_info, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-
-    # Update knowledge-lock.json
-    new_lock = {
-        "files": new_file_entries,
-        "last_synced_hash": project_hashes,
-    }
-    (project_dir / "knowledge-lock.json").write_text(
-        json.dumps(new_lock, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-
+def _hash_documents(documents_dir: Path) -> Dict[str, str]:
+    if not documents_dir.exists():
+        return {}
     return {
-        "project_id": project_id,
-        "new": new_files,
-        "modified": modified_files,
-        "deleted": deleted_files,
-        "conflicted": conflicted_files,
-        "pulled": pulled_files,
-        "total": len(knowledge_files),
-        "last_synced_commit": head,
+        path.relative_to(documents_dir).as_posix(): hash_file(path)
+        for path in sorted(documents_dir.rglob("*"))
+        if path.is_file()
     }
 
 
-# ---------------------------------------------------------------------------
-# Status
-# ---------------------------------------------------------------------------
+def _locked_hashes(lock: dict) -> Dict[str, str]:
+    return {
+        entry["path"]: entry.get("sha256", "")
+        for entry in lock.get("files", [])
+        if isinstance(entry, dict) and "path" in entry
+    }
 
-def knowledge_status(
-    repo_root: Path,
-    store: Optional[Path] = None,
+
+def _write_lock(project_dir: Path, hashes: Dict[str, str]) -> None:
+    project_dir.mkdir(parents=True, exist_ok=True)
+    entries = [
+        {"path": path, "sha256": sha256}
+        for path, sha256 in sorted(hashes.items())
+    ]
+    (project_dir / "knowledge-lock.json").write_text(
+        json.dumps({"schema_version": 1, "files": entries}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _snapshot(repo_root: Path, project_dir: Path, manifest_path: Optional[Path]):
+    project_files = _discover_knowledge_files(repo_root, manifest_path)
+    project_hashes = {
+        rel: hash_file(path) for rel, path in project_files.items()
+    }
+    store_hashes = _hash_documents(project_dir / "documents")
+    baseline = _locked_hashes(_read_lock(project_dir))
+    return project_files, project_hashes, store_hashes, baseline
+
+
+def _compare(
+    project_hashes: Dict[str, str],
+    store_hashes: Dict[str, str],
+    baseline: Dict[str, str],
 ) -> dict:
-    """Compare project knowledge docs with central store.
-
-    Returns a dict with new/modified/deleted/conflicted file lists and conflict info.
-    """
-    repo_root = Path(repo_root).resolve()
-    project_id = _derive_project_id(repo_root)
-    store_path = _get_store(store)
-    project_dir = _project_dir(store_path, project_id)
-
-    knowledge_files = _discover_knowledge_files(repo_root)
-    lock = _read_knowledge_lock(project_dir)
-    project_info = _read_project_json(project_dir)
-
-    locked_hashes: Dict[str, str] = {}
-    for entry in lock.get("files", []):
-        locked_hashes[entry["path"]] = entry.get("sha256", "")
-
-    project_hashes: Dict[str, str] = {}
-    for rel, fpath in knowledge_files.items():
-        project_hashes[rel] = hash_file(fpath)
-
-    store_hashes: Dict[str, str] = {}
-    store_docs_dir = project_dir / "documents"
-    if store_docs_dir.exists():
-        for f in sorted(store_docs_dir.rglob("*")):
-            if f.is_file():
-                rel = f.relative_to(store_docs_dir).as_posix()
-                store_hashes[rel] = hash_file(f)
-
     new_files: List[str] = []
     modified_files: List[str] = []
+    store_modified_files: List[str] = []
     deleted_files: List[str] = []
     conflicted_files: List[str] = []
     synced_files: List[str] = []
 
-    all_paths = set(list(project_hashes.keys()) + list(locked_hashes.keys()) + list(store_hashes.keys()))
-
+    all_paths = set(project_hashes) | set(store_hashes) | set(baseline)
     for rel in sorted(all_paths):
         project_hash = project_hashes.get(rel)
         store_hash = store_hashes.get(rel)
-        last_synced = locked_hashes.get(rel)
+        last_synced = baseline.get(rel)
 
         if project_hash is None:
             deleted_files.append(rel)
             continue
-
-        if store_hash is None and last_synced is None:
-            new_files.append(rel)
-            continue
-
         if project_hash == store_hash:
             synced_files.append(rel)
             continue
-
-        if project_hash != last_synced and store_hash == last_synced:
-            modified_files.append(rel)
-            continue
-
-        if project_hash != last_synced and store_hash != last_synced:
-            conflicted_files.append(rel)
-            continue
-
-        # Catch-all: store has different hash but last_synced matches project
-        if project_hash == last_synced and store_hash != last_synced:
-            # Store was modified independently
-            modified_files.append(f"[store] {rel}")
-            continue
-
         if last_synced is None:
-            new_files.append(rel)
+            if store_hash is None:
+                new_files.append(rel)
+            else:
+                conflicted_files.append(rel)
+            continue
+
+        project_changed = project_hash != last_synced
+        store_changed = store_hash != last_synced
+        if project_changed and not store_changed:
+            modified_files.append(rel)
+        elif not project_changed and store_changed:
+            store_modified_files.append(rel)
+        elif project_changed and store_changed:
+            conflicted_files.append(rel)
+        else:
+            deleted_files.append(rel)
 
     return {
-        "project_id": project_id,
-        "project_name": project_info.get("display_name", repo_root.name),
-        "last_synced_commit": project_info.get("last_synced_commit", ""),
-        "last_synced_at": project_info.get("last_synced_at", ""),
         "new": new_files,
         "modified": modified_files,
+        "store_modified": store_modified_files,
         "deleted": deleted_files,
         "conflicted": conflicted_files,
         "synced": synced_files,
-        "total": len(knowledge_files),
-        "store_total": len(store_hashes),
-        "has_conflicts": len(conflicted_files) > 0,
     }
 
 
-# ---------------------------------------------------------------------------
-# Push: store → project (only for explicit recovery)
-# ---------------------------------------------------------------------------
+def knowledge_pull(
+    repo_root: Path,
+    store: Optional[Path] = None,
+    manifest_path: Optional[Path] = None,
+) -> dict:
+    """Copy project knowledge into the local store when it is safe."""
+    repo_root = Path(repo_root).resolve()
+    project_id = _derive_project_id(repo_root)
+    project_dir = _project_dir(_get_store(store), project_id)
+    project_files, project_hashes, store_hashes, baseline = _snapshot(
+        repo_root, project_dir, manifest_path
+    )
+    changes = _compare(project_hashes, store_hashes, baseline)
+
+    pulled: List[str] = []
+    missing_from_store = [
+        rel for rel in changes["store_modified"]
+        if rel not in store_hashes
+    ]
+    for rel in sorted(set(changes["new"] + changes["modified"] + missing_from_store)):
+        source = project_files[rel]
+        destination = project_dir / "documents" / rel
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        pulled.append(rel)
+
+    updated_hashes = _hash_documents(project_dir / "documents")
+    for rel in changes["synced"] + pulled:
+        updated_hashes[rel] = project_hashes[rel]
+    remaining_store_changes = set(changes["store_modified"]) - set(missing_from_store)
+    if not changes["conflicted"] and not remaining_store_changes:
+        _write_lock(project_dir, updated_hashes)
+
+    return {
+        "project_id": project_id,
+        "new": changes["new"],
+        "modified": changes["modified"],
+        "store_modified": changes["store_modified"],
+        "deleted": changes["deleted"],
+        "conflicted": changes["conflicted"],
+        "pulled": pulled,
+        "total": len(project_files),
+    }
+
+
+def knowledge_status(
+    repo_root: Path,
+    store: Optional[Path] = None,
+    manifest_path: Optional[Path] = None,
+) -> dict:
+    """Compare project files, the local copy, and the last safe baseline."""
+    repo_root = Path(repo_root).resolve()
+    project_id = _derive_project_id(repo_root)
+    project_dir = _project_dir(_get_store(store), project_id)
+    project_files, project_hashes, store_hashes, baseline = _snapshot(
+        repo_root, project_dir, manifest_path
+    )
+    changes = _compare(project_hashes, store_hashes, baseline)
+    return {
+        "project_id": project_id,
+        "project_name": repo_root.name,
+        **changes,
+        "total": len(project_files),
+        "store_total": len(store_hashes),
+        "has_conflicts": bool(changes["conflicted"]),
+    }
+
 
 def knowledge_push(
     repo_root: Path,
     store: Optional[Path] = None,
     force: bool = False,
+    manifest_path: Optional[Path] = None,
 ) -> dict:
-    """Push store documents back to the project.
-
-    Only works when there are no conflicts (unless force=True).
-    Only copies files where the project hasn't been modified since last sync.
-
-    Returns a summary dict.
-    """
+    """Restore local store documents into the repository after conflict checks."""
     repo_root = Path(repo_root).resolve()
     project_id = _derive_project_id(repo_root)
-    store_path = _get_store(store)
-    project_dir = _project_dir(store_path, project_id)
+    project_dir = _project_dir(_get_store(store), project_id)
+    documents_dir = project_dir / "documents"
+    store_hashes = _hash_documents(documents_dir)
+    if not store_hashes:
+        return {"project_id": project_id, "error": "No store documents found.", "pushed": []}
 
-    status = knowledge_status(repo_root, store)
+    status = knowledge_status(repo_root, store, manifest_path)
     if status["has_conflicts"] and not force:
         return {
+            "project_id": project_id,
             "error": "Conflicts detected. Use --force to override.",
             "conflicted": status["conflicted"],
             "pushed": [],
         }
 
-    knowledge_files = _discover_knowledge_files(repo_root)
-    store_docs_dir = project_dir / "documents"
-    if not store_docs_dir.exists():
-        return {"error": "No store documents found.", "pushed": []}
-
+    _, project_hashes, _, baseline = _snapshot(repo_root, project_dir, manifest_path)
     pushed: List[str] = []
-
-    for f in sorted(store_docs_dir.rglob("*")):
-        if not f.is_file():
+    skipped: List[str] = []
+    for rel in sorted(store_hashes):
+        source = documents_dir / rel
+        destination = repo_root / "docs" / rel
+        if not force and destination.exists() and baseline.get(rel) != project_hashes.get(rel):
+            skipped.append(rel)
             continue
-        rel = f.relative_to(store_docs_dir).as_posix()
-        # rel may contain subdir prefix like "Guidelines/paths.md" or "Framework/mod.md"
-        dest = repo_root / "docs" / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(f, dest)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
         pushed.append(rel)
 
+    _write_lock(project_dir, store_hashes)
     return {
         "project_id": project_id,
         "pushed": pushed,
+        "skipped": skipped,
         "total_pushed": len(pushed),
     }
