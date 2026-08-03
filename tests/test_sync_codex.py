@@ -234,6 +234,96 @@ class TestSyncCodex(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("missing" in i.lower() for i in issues))
 
+    def test_check_detects_missing_openai_yaml(self):
+        repo = self._make_repo()
+        sync_codex(CORE_PACK, repo)
+        yaml_path = repo / ".agents" / "skills" / "layer-debug" / "agents" / "openai.yaml"
+        yaml_path.unlink()
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertFalse(ok)
+        self.assertTrue(
+            any("missing skill file" in i.lower() for i in issues),
+            f"Missing openai.yaml not detected: {issues}",
+        )
+
+    def test_check_detects_tampered_openai_yaml(self):
+        repo = self._make_repo()
+        sync_codex(CORE_PACK, repo)
+        yaml_path = repo / ".agents" / "skills" / "layer-debug" / "agents" / "openai.yaml"
+        yaml_path.write_text("# tampered\n", encoding="utf-8")
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertFalse(ok)
+        self.assertTrue(
+            any("hash mismatch" in i.lower() for i in issues),
+            f"Tampered openai.yaml not detected: {issues}",
+        )
+
+    def test_check_detects_changed_source_pack(self):
+        """Changing the pack source after sync must be reported by check_sync."""
+        repo = self._make_repo()
+        tmp_pack = self.tmpdir / "pack-copy"
+        import shutil
+        shutil.copytree(CORE_PACK, tmp_pack)
+        sync_codex(tmp_pack, repo)
+        # Mutate the pack source after sync
+        target = tmp_pack / "skills" / "layer-debug" / "SKILL.md"
+        target.write_text(target.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8")
+        ok, issues = check_sync(tmp_pack, repo)
+        self.assertFalse(ok)
+        self.assertTrue(
+            any("pack source changed" in i.lower() for i in issues),
+            f"Changed pack not detected: {issues}",
+        )
+
+    # ── Ownership collisions ──
+
+    def test_first_sync_rejects_unmanaged_same_name_skill(self):
+        """A project-owned skill sharing an Illuminate skill's name must
+        fail closed on first sync (no overwrite, no claiming)."""
+        repo = self._make_repo()
+        project_skill = repo / ".agents" / "skills" / "layer-debug"
+        project_skill.mkdir(parents=True)
+        (project_skill / "SKILL.md").write_text("# project-owned layer-debug", encoding="utf-8")
+
+        with self.assertRaises(ValueError) as ctx:
+            sync_codex(CORE_PACK, repo)
+        self.assertIn("not Illuminate-managed", str(ctx.exception))
+
+    def test_failed_collision_never_claims_or_deletes_existing_skill(self):
+        """After a failed collision, the existing skill is intact and the
+        lock does not claim it."""
+        repo = self._make_repo()
+        project_skill = repo / ".agents" / "skills" / "layer-debug"
+        project_skill.mkdir(parents=True)
+        original = "# project-owned layer-debug\nconfig: 42\n"
+        (project_skill / "SKILL.md").write_text(original, encoding="utf-8")
+        (project_skill / "project-config.json").write_text("{}", encoding="utf-8")
+
+        with self.assertRaises(ValueError):
+            sync_codex(CORE_PACK, repo)
+
+        self.assertEqual(
+            (project_skill / "SKILL.md").read_text(encoding="utf-8"), original,
+            "Existing skill content must be untouched after failed sync",
+        )
+        self.assertTrue((project_skill / "project-config.json").exists())
+        # Fail-before-write: no AGENTS.md, no lock, no extra skill dirs
+        self.assertFalse(
+            (repo / "AGENTS.md").exists(),
+            "Failed sync must not write AGENTS.md",
+        )
+        self.assertFalse(
+            (repo / ".illuminate").exists(),
+            "Failed sync must not write a lock claiming the colliding skill",
+        )
+        skill_dirs = [
+            d.name for d in (repo / ".agents" / "skills").iterdir() if d.is_dir()
+        ]
+        self.assertEqual(
+            skill_dirs, ["layer-debug"],
+            "Failed sync must not copy any Illuminate skills",
+        )
+
     # ── Clean ──
 
     def test_clean_removes_all_artifacts(self):

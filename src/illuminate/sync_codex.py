@@ -2,7 +2,7 @@
 
 Generates:
   AGENTS.md                  (Illuminate policy block, merged via <!-- illuminate:... --> markers)
-  .agents/skills/            (selected skills, atomic sync)
+  .agents/skills/            (selected skills, lock-owned sync)
   .agents/skills/*/agents/openai.yaml  (App metadata for each skill)
   .illuminate/codex-lock.json         (sync manifest with hashes)
 
@@ -99,17 +99,31 @@ def _sync_skills(
     """Sync selected skills into repo_root/.agents/skills/.
 
     Only skills recorded in the previous codex-lock are treated as
-    Illuminate-managed; project-owned skill directories under
-    .agents/skills/ are preserved. This matches the ownership model used by
-    the CodeBuddy sync adapter.
+    Illuminate-managed. A project-owned directory that shares a skill's
+    name is never overwritten or claimed: sync fails closed with
+    ValueError instead.
 
     Returns {skill_name: [copied_file_rel_paths]}.
     """
     target_dir = repo_root / ".agents" / "skills"
-    target_dir.mkdir(parents=True, exist_ok=True)
 
     lock = load_codex_lock(repo_root)
     managed_names = {e["name"] for e in lock.get("skills", [])} if lock else set()
+
+    # Pre-flight collision check: fail closed before touching the repo, so a
+    # collision leaves no partial write behind.
+    for entry in manifest.get("skills", []):
+        if entry["id"] not in exposed:
+            continue
+        skill_name = entry["dir"].split("/")[-1]
+        dest_dir = target_dir / skill_name
+        if dest_dir.exists() and skill_name not in managed_names:
+            raise ValueError(
+                f"Cannot sync skill '{skill_name}': "
+                "destination already exists and is not Illuminate-managed"
+            )
+
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     copied: Dict[str, List[str]] = {}
     synced_names = set()
@@ -266,12 +280,15 @@ def sync_codex(
 
     Steps:
       1. Validate pack.
-      2. Resolve exposed skills (filter + alias resolution + conflict check).
+      2. Resolve exposed skills via the shared resolver (unknown-ID, alias,
+         and cycle checks; activation_conflicts is activation-level, so
+         exposure never rejects conflicting skills).
       3. Merge Illuminate policy block into AGENTS.md.
-      4. Atomically sync .agents/skills/.
-      5. Generate agents/openai.yaml for each skill.
+      4. Sync .agents/skills/ (lock-owned: only previously managed skills are
+         replaced or removed; project-owned skills are preserved).
+      5. Generate agents/openai.yaml for each skill and register it in the
+         lock.
       6. Generate .illuminate/codex-lock.json.
-      7. Clean stale skills not in the exposed set.
 
     Returns a summary dict with sync results.
     """
@@ -291,14 +308,15 @@ def sync_codex(
     # 2. Resolve exposed skills via the single shared resolver
     exposed = set(resolve_exposed_skills(manifest, contracts, skill_filter))
 
-    # 3. Merge AGENTS.md
+    # 3. Sync .agents/skills/ first (lock-owned; project-owned skills
+    # preserved; collisions fail closed before any repo modification)
+    skill_files = _sync_skills(pack_dir, repo_root, manifest, exposed)
+
+    # 4. Merge AGENTS.md
     agents_path = repo_root / "AGENTS.md"
     block_text = _build_agents_block(pack_dir, manifest, exposed)
     new_content, agents_modified = merge_agents_block(agents_path, block_text)
     agents_path.write_text(new_content, encoding="utf-8")
-
-    # 4. Sync .agents/skills/ (lock-owned; project-owned skills preserved)
-    skill_files = _sync_skills(pack_dir, repo_root, manifest, exposed)
 
     # 5. Generate agents/openai.yaml for each exposed skill
     contracts_by_id = {c["id"]: c for c in contracts}
@@ -312,6 +330,11 @@ def sync_codex(
         yaml_dest = repo_root / ".agents" / "skills" / skill_name / "agents" / "openai.yaml"
         yaml_dest.parent.mkdir(parents=True, exist_ok=True)
         yaml_dest.write_text(yaml_content, encoding="utf-8")
+        # Register in skill_files (idempotently) so the lock hashes this
+        # generated artifact too
+        yaml_files = skill_files.setdefault(skill_name, [])
+        if "agents/openai.yaml" not in yaml_files:
+            yaml_files.append("agents/openai.yaml")
         openai_yamls[skill_name] = yaml_content
 
     # 6. Generate lock
@@ -338,9 +361,11 @@ def check_sync(
     """Verify the Codex sync is current and consistent.
 
     Checks:
+      - source pack hash matches the one recorded at sync time
       - AGENTS.md contains the illuminate block
       - .agents/skills/ exists and has expected skills
-      - openai.yaml exists for each skill
+      - every lock-recorded skill file (incl. agents/openai.yaml) exists
+        with an unchanged hash
       - codex-lock.json exists and hashes match
 
     Returns (ok, list_of_issues).
@@ -370,6 +395,11 @@ def check_sync(
     if lock is None:
         issues.append("codex-lock.json not found")
     else:
+        # Verify source pack unchanged
+        current_pack_hash = lock_hash(hash_directory(pack_dir))
+        if lock.get("pack", {}).get("hash") != current_pack_hash:
+            issues.append("Pack source changed — run sync again")
+
         # Verify AGENTS.md hash
         if agents_path.exists():
             actual_hash = hash_file(agents_path)
