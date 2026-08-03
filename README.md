@@ -7,13 +7,39 @@ Git-versioned Harness Knowledge Pack + executable mount CLI for Claude Code.
 ```bash
 pip install -e .
 illuminate pack validate packs/core
-illuminate run --pack packs/core --repo /path/to/your/project
-illuminate evidence audit --repo /path/to/project --pretty
+    illuminate run --pack packs/core --repo /path/to/your/project
+    illuminate evidence audit --repo /path/to/project --pretty
+    illuminate docs export-human --source /path/to/docs --output /path/to/human-docs --config /path/to/docs/human-docs.json
+    illuminate docs lint-human --source /path/to/docs --config /path/to/docs/human-docs.json
 ```
 
 ## What This Is
 
 A versioned collection of engineering policies, skills, references, and evidence tools that mount into any target project's AI coding session without copying files into the project.
+
+## Human Documentation Export
+
+Keep human-readable Markdown as the source truth and store claims, evidence, and test metadata separately. Place an optional `human-docs.json` beside the documentation root:
+
+```json
+{
+  "include": [
+    "README-HUMAN.md",
+    "20-components/**/*.md",
+    "30-modules/**/*.md",
+    "40-journeys/**/*.md"
+  ],
+  "exclude": [
+    "**/verification/**",
+    "80-evidence/**",
+    "90-generated/**",
+    "99-archive/**"
+  ],
+  "readme": "README-HUMAN.md"
+}
+```
+
+`docs export-human` only copies selected Markdown and maps `README-HUMAN.md` to the export root `README.md`; it does not parse or rewrite正文. Run `docs lint-human` separately after cleaning the source Markdown.
 
 ## Structure
 
@@ -43,6 +69,8 @@ A versioned collection of engineering policies, skills, references, and evidence
 | `illuminate run --pack <dir> --repo <path> [--skill <id>...]` | Materialize and launch Claude Code |
 | `illuminate run --pack <dir> --repo <path> --dry-run` | Materialize and print launch command without executing |
 | `illuminate evidence audit --repo <path>` | Run evidence audit |
+| `illuminate docs export-human --source <dir> --output <dir> [--config <json>]` | Copy configured human-readable Markdown without rewriting content |
+| `illuminate docs lint-human --source <dir> [--config <json>]` | Check human Markdown rules and local links |
 | `illuminate compat generate [--pack <dir>]` | Generate legacy compatibility dirs from canonical sources |
 | `illuminate compat check [--pack <dir>]` | Check compatibility dirs match canonical sources (files + SHA-256) |
 | `illuminate sync codex --repo <path> [--pack <dir>] [--skill <id>...]` | Sync pack into target repo for Codex App |

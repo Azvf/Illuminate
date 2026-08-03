@@ -36,6 +36,8 @@ from .compat import compat_generate, compat_check
 from .sync_codex import sync_codex, check_sync as check_codex_sync, clean_sync as clean_codex_sync
 from .sync_codebuddy import sync_codebuddy, check_sync as check_codebuddy_sync, clean_sync as clean_codebuddy_sync
 from .knowledge_store import knowledge_pull, knowledge_status, knowledge_push
+from .docs_export import export_human, DocsExportError
+from .docs_lint import format_lint_errors, lint_human
 
 
 _SESSION_BASE = Path.home() / ".illuminate" / "sessions"
@@ -156,6 +158,19 @@ def _build_parser():
     kpush.add_argument("--repo", required=True, help="Target repository path")
     kpush.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
     kpush.add_argument("--force", action="store_true", help="Override conflicts")
+
+    # docs export-human / lint-human
+    p = sub.add_parser("docs", help="Documentation operations")
+    ps = p.add_subparsers(dest="docs_command")
+    de = ps.add_parser("export-human", help="Copy configured human-readable Markdown docs")
+    de.add_argument("--source", required=True, help="Documentation source root")
+    de.add_argument("--output", required=True, help="Export output directory")
+    de.add_argument("--config", default=None, help="JSON config path (default: <source>/human-docs.json if present)")
+    de.add_argument("--force", action="store_true", help="Replace a non-empty output directory")
+    dl = ps.add_parser("lint-human", help="Lint human-readable Markdown docs")
+    dl.add_argument("--source", required=True, help="Documentation root or export directory")
+    dl.add_argument("--config", default=None, help="JSON config path")
+    dl.add_argument("--all-markdown", action="store_true", help="Lint every Markdown file below source")
 
     return parser
 
@@ -578,6 +593,46 @@ def _cmd_knowledge_status(args):
     return 0
 
 
+def _cmd_docs_export_human(args):
+    source_root = Path(args.source).resolve()
+    output_root = Path(args.output).resolve()
+    config_path = Path(args.config).resolve() if args.config else None
+    if config_path is None:
+        candidate = source_root / "human-docs.json"
+        config_path = candidate if candidate.is_file() else None
+    try:
+        result = export_human(
+            source_root,
+            output_root,
+            config_path=config_path,
+            force=args.force,
+        )
+    except DocsExportError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print("Human documentation export: COMPLETE", file=sys.stderr)
+    print(f"  Source:   {result['source']}", file=sys.stderr)
+    print(f"  Output:   {result['output']}", file=sys.stderr)
+    print(f"  Files:    {result['file_count']}", file=sys.stderr)
+    return 0
+
+
+def _cmd_docs_lint_human(args):
+    source_root = Path(args.source).resolve()
+    config_path = Path(args.config).resolve() if args.config else None
+    if config_path is None and not args.all_markdown:
+        candidate = source_root / "human-docs.json"
+        config_path = candidate if candidate.is_file() else None
+    errors = lint_human(
+        source_root,
+        config_path=config_path,
+        all_markdown=args.all_markdown,
+    )
+    print(format_lint_errors(errors), file=sys.stderr)
+    return 1 if errors else 0
+
+
 def _cmd_knowledge_push(args):
     repo = Path(args.repo).resolve()
     if not repo.exists():
@@ -625,6 +680,8 @@ _DISPATCH = {
     ("knowledge", "pull"): _cmd_knowledge_pull,
     ("knowledge", "status"): _cmd_knowledge_status,
     ("knowledge", "push"): _cmd_knowledge_push,
+    ("docs", "export-human"): _cmd_docs_export_human,
+    ("docs", "lint-human"): _cmd_docs_lint_human,
 }
 
 
