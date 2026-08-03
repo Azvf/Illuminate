@@ -486,7 +486,9 @@ Skill 源文件位于 `packs/core/skills/`，每个 skill 包含 `SKILL.md`（�
 | 功能链路排障 | `layer-debug` | 数据不完整、解析错误、依赖丢失 |
 | 性能分析 | `perf-profile` | 启动慢、加载慢、滚动卡顿 |
 | 排障陷入死循环 | `backtrack-root-cause` | 反复打补丁、走死胡同 |
-| 文档整理 | `tidy-doc` | 整理 AGENTS.md、skills、guidelines |
+| 记录已验证知识 | `record-knowledge` | 将最小稳定事实写入唯一正文 Owner 与对应治理 YAML |
+| 模块文档归档 | `archive-module-doc` | 将模块知识收口到 `30-modules/<module>/README.md` |
+| 文档整理 | `tidy-doc` | 整理 AGENTS.md、skills、20/30/40 文档与知识索引 |
 | 设计压力测试 | `grilling` | 方案需要系统性追问 |
 | 代码精简诊断 | `simplify-code` | 冗余传递链、多 fallback、双轨并行 |
 | 改动前影响评估 | `impact-analysis` | 评估改动波及范围、识别回归风险 |

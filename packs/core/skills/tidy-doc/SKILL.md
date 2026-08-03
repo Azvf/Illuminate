@@ -19,8 +19,9 @@ description: Systematically clean up, align, and simplify repository documentati
 以下类型的请求应触发本 skill：
 
 - 精简 `AGENTS.md`、skill、guideline、framework 文档
-- 对齐 `docs/Guidelines`、`docs/Framework`、`docs/Development`
+- 对齐 `docs/20-components`、`docs/30-modules`、`docs/40-journeys` 与项目声明的 Guidelines root
 - 清理重复规则、失效入口、旧目录名、旧组件落点、旧架构说法
+- 检查人类正文与 Verification YAML 的 Owner、`doc_refs` 和导出清单
 - 修正文档索引、skill 触发范围、文档迁移状态
 - 做一轮"文档一致性审计"或"文档收口"
 
@@ -34,8 +35,10 @@ description: Systematically clean up, align, and simplify repository documentati
 
 - `AGENTS.md`
 - 相关 skill 的 `SKILL.md`
-- 相关 `docs/Guidelines/*.md`
-- 相关 `docs/Framework/*.md`
+- 相关 `docs/README-HUMAN.md` 与 `docs/human-docs.json`
+- 相关 `docs/20-components/**/*.md`
+- 相关 `docs/30-modules/**` 与 `docs/40-journeys/**/*.md`
+- 项目声明的 Guidelines root
 - 必要时读取 `docs/Development/Active/*.md` 与 `docs/Development/Archived/*.md`
 
 先回答：
@@ -64,10 +67,11 @@ description: Systematically clean up, align, and simplify repository documentati
 
 1. `AGENTS.md`
 2. 对应 skill
-3. `docs/Framework` 中的稳定基线文档
-4. `docs/Guidelines`
-5. `docs/Research`、`docs/Issues`
-6. `docs/Development/*`
+3. `docs/README-HUMAN.md`、`docs/human-docs.json`
+4. `docs/30-modules` 和 `docs/40-journeys` 中的稳定人类正文
+5. `docs/20-components` 与项目声明的 Guidelines root
+6. `docs/Research`、`docs/Issues`、`docs/Development/*`
+7. `verification/*.yaml` 及其 `doc_refs`
 
 原因：
 

@@ -1,7 +1,7 @@
 interface:
   display_name: "Record Knowledge"
   short_description: "Incrementally record small, verified project knowledge — conventions, paths, module flows, boundaries, or failure modes"
-  default_prompt: "Record the verified facts from this task. Determine if they are cross-module (docs/Guidelines/) or module-specific (docs/Framework/). Update the smallest existing owner document."
+  default_prompt: "Record the verified facts from this task. Update the smallest existing human-document owner (30-modules/<module>/README.md, 40-journeys/<guide>.md, 20-components, or the project's Guidelines root) and keep Claim/Gap/Test metadata in verification YAML with doc_refs."
 
 policy:
   allow_implicit_invocation: false

@@ -13,28 +13,23 @@ description: Incrementally record small, verified project knowledge discovered d
 
 ### 第一层：通用知识
 
-回答跨模块、跨任务长期成立的问题，例如：
-
-- 路径与目录规范
-- 命名规则
-- 配置优先级
-- 日志与测试约定
-- 通用安全边界
-
-存放位置：`docs/Guidelines/` 中已有的 owner 文档。
+回答跨模块、跨任务长期成立的问题，例如路径规范、命名规则、配置优先级、日志约定和安全边界。写入项目声明的 Guidelines owner；不要因为本 Skill 而擅自创建旧式 `docs/Guidelines/`。
 
 ### 第二层：模块级知识
 
-回答单一模块的稳定职责和功能链路，例如：
+回答单一模块的稳定职责和功能链路，包括入口、关键组件、边界、失败模式和恢复方式。新知识库布局中，写入：
 
-- 模块做什么
-- 从哪里进入
-- 经过哪些关键组件
-- 关键边界
-- 已验证失败模式
-- 如何验证
+```text
+30-modules/<module>/README.md
+```
 
-存放位置：`docs/Framework/` 中对应模块文档。
+该 README 是完整的人类正文 Owner，不是仅提供索引的壳。
+
+### 第三层：跨模块流程
+
+完整跨模块顺序写入 `40-journeys/` Guide；Guide 只描述流程、交接和决策，模块内部细节链接回 `30-modules/<module>/README.md`。
+
+Claim、Gap、Test、Evidence 和 source anchor 保存在模块 `verification/*.yaml`，通过 `doc_refs` 指向正文标题；不要把机器 ID、状态或 Hash 复制进 Markdown。
 
 ## 触发方式
 
@@ -89,19 +84,21 @@ $record-knowledge 记录 Manifest 配置来源和覆盖关系
 
 ### 第二步：判断知识层级
 
-| 特征 | 层级 | 目标目录 |
+| 特征 | 层级 | 目标 Owner |
 |------|------|----------|
-| 跨模块适用，表达"默认怎么做" | 通用知识 | `docs/Guidelines/` |
-| 属于一个明确模块，描述职责/边界/链路 | 模块级知识 | `docs/Framework/` |
+| 跨模块适用，表达“默认怎么做” | 通用知识 | 项目声明的 Guidelines owner |
+| 属于一个明确模块，描述职责/边界/链路 | 模块级知识 | `30-modules/<module>/README.md` |
+| 跨模块完整顺序、交接和决策 | 业务流程 | `40-journeys/<guide>.md` |
 
 ### 第三步：寻找已有 owner
 
 按顺序检查：
 
-1. 已有模块 Framework 文档
-2. 已有对应 Guideline
-3. 文档索引中指向的 owner
-4. 相关 Skill 指定的文档入口
+1. `30-modules/<module>/README.md` 或现有模块正文 Owner
+2. `40-journeys/` 中的流程 Owner
+3. 已有对应 Guideline
+4. 文档索引和 `human-docs.json` 中指向的 Owner
+5. 相关 Skill 指定的文档入口
 
 处理规则：
 
@@ -152,8 +149,8 @@ record-knowledge
          推荐 tidy-doc
 ```
 
-- 小知识增量由 `record-knowledge` 维护
-- 模块知识达到一定规模后，由 `archive-module-doc` 整理为结构化文档集
+- 小知识增量由 `record-knowledge` 维护在唯一正文 Owner 和对应 YAML
+- 模块知识达到一定规模后，由 `archive-module-doc` 收口到完整的 `30-modules/<module>/README.md`
 - 跨模块治理由 `tidy-doc` 处理
 
 发现文档体系混乱（多份重复文档、owner 不清晰、索引失效、Guidelines 与 Framework 混杂）时可考虑调用 `tidy-doc`。

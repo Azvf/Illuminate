@@ -60,7 +60,12 @@
   "project_context": {
     "candidates": [
       "docs/Guidelines/**/*.md",
-      "docs/Framework/**/*.md"
+      "docs/Framework/**/*.md",
+      "docs/20-components/**/*.md",
+      "docs/30-modules/**/*.md",
+      "docs/40-journeys/**/*.md",
+      "docs/README-HUMAN.md",
+      "docs/human-docs.json"
     ],
     "required": false
   },

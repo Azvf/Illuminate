@@ -31,7 +31,16 @@
       "repository/**"
     ],
     "write": [
-      "repository/**"
+      "AGENTS.md",
+      "docs/20-components/**",
+      "docs/30-modules/**",
+      "docs/40-journeys/**",
+      "docs/README-HUMAN.md",
+      "docs/human-docs.json",
+      "docs/Guidelines/**",
+      "docs/Framework/**",
+      "docs/Development/**",
+      "packs/core/skills/**"
     ],
     "execute": [
       "grep",
@@ -43,6 +52,21 @@
   "relations": {
     "recommended_next": [],
     "activation_conflicts": []
+  },
+
+  "project_context": {
+    "candidates": [
+      "README-HUMAN.md",
+      "human-docs.json",
+      "20-components/**/*.md",
+      "30-modules/**/*",
+      "40-journeys/**/*.md",
+      "**/verification/*.yaml",
+      "Guidelines/**/*.md",
+      "Framework/**/*.md",
+      "Development/**/*.md"
+    ],
+    "required": false
   },
 
   "outputs": [

@@ -1,36 +1,26 @@
-# 知识分类规则
+# 模块文档分类规则
 
-## 通用知识 → docs/Guidelines/
+## 模块正文 Owner
 
-跨模块适用的规则。特征：
+所有模块级稳定职责、链路、边界和失败恢复统一归入：
 
-- 换到另一个模块仍然成立
-- 表达"默认怎么做"
-- 属于施工规则或规范
+```text
+30-modules/<module>/README.md
+```
 
-常见主题：目录规范、命名规则、日志格式、配置约定、测试约定。
+README 是完整人类正文。不要把模块正文拆回旧式 `docs/Framework/<Module>.md` 或只负责索引的 README。
 
-## 模块知识 → docs/Framework/<Module>/
+## 组件与流程边界
 
-仅对当前模块成立的职责和边界。特征：
+- 组件/API 生命周期和实现细节 → `20-components/`。
+- 跨模块顺序、交接和决策 → `40-journeys/`。
+- 模块内部的完整链路和状态 → `30-modules/<module>/README.md`。
+- Android/iOS 等平台差异 → 模块目录下 `platforms/`。
+- Claim、Evidence、Gap、Test 和 source anchor → `verification/*.yaml`。
 
-- 属于一个明确模块
-- 描述职责、边界或功能链路
-- 涉及多个组件协作
-- 回答"这个模块如何工作"
+## 判断问题
 
-## 模式选择判断
-
-| 条件 | 模式 |
-|------|------|
-| 知识主题 ≤ 4 且主链路 ≤ 1 | Compact |
-| 知识主题 5～10 或独立链路 2～3 | Standard |
-| 知识主题 > 10 或包含多子系统/跨端契约 | Extended |
-
-## 章节创建规则
-
-- 必选章节：模块全景、核心链路、风险与维护
-- 可选章节：只有确实存在时才创建
-- 禁止为填满模板而编造内容
-- 禁止在模块文档中重复 Guidelines 内容
-- 同一事实只能有一个 owner
+1. 这个事实换到另一个模块仍然成立吗？成立则进入 Guidelines owner。
+2. 它描述组件 API 还是模块业务链路？前者进入 `20-components`，后者进入 `30-modules`。
+3. 它描述多个模块的顺序吗？是则进入 `40-journeys`。
+4. 它只是可信度、证据或测试元数据吗？是则只进入 Verification YAML。
