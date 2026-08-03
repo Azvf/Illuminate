@@ -379,6 +379,12 @@ def _cmd_evidence_audit(args):
         if not pack_dir.exists():
             print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
             return 1
+        ok, pack_errors = validate_pack(pack_dir)
+        if not ok:
+            print(f"Error: --pack is not a valid pack: {pack_dir}", file=sys.stderr)
+            for err in pack_errors[:5]:
+                print(f"  - {err}", file=sys.stderr)
+            return 1
     output_path = Path(args.output) if args.output else None
     try:
         evidence = run_audit(
