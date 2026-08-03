@@ -3,10 +3,10 @@
 Commands:
     illuminate pack validate <pack_dir>
     illuminate repo inspect --repo <path>
-    illuminate mount create --pack <dir> --repo <path> [--harness claude-code]
+    illuminate mount create --pack <dir> --repo <path> [--skill <id>...]
     illuminate mount verify <session-dir>
     illuminate mount remove <session-dir-or-id>
-    illuminate run --pack <dir> --repo <path> [--harness claude-code] [--skill <id>...] [--dry-run]
+    illuminate run --pack <dir> --repo <path> [--skill <id>...] [--dry-run]
     illuminate evidence audit --repo <path> [--pretty] [--output <path>]
     illuminate compat generate [--pack <dir>]
     illuminate compat check [--pack <dir>]
@@ -14,9 +14,12 @@ Commands:
     illuminate sync codebuddy --repo <path> [--pack <dir>] [--skill <id>...]
     illuminate sync check --repo <path> [--pack <dir>]
     illuminate sync clean --repo <path>
-    illuminate knowledge pull --repo <path> [--store <dir>]
-    illuminate knowledge status --repo <path> [--store <dir>]
-    illuminate knowledge push --repo <path> [--store <dir>] [--force]
+    illuminate knowledge pull --repo <path> [--store <dir>] [--manifest <json>]
+    illuminate knowledge status --repo <path> [--store <dir>] [--manifest <json>]
+    illuminate knowledge push --repo <path> [--store <dir>] [--manifest <json>] [--force]
+    illuminate docs export-human --source <dir> --output <dir> [--config <json>]
+    illuminate docs lint-human --source <dir> [--config <json>]
+    illuminate docs lint-knowledge --source <dir>
 """
 
 import argparse
@@ -29,7 +32,6 @@ from . import __version__
 from .validate import validate_pack
 from .inspect_repo import inspect_repo, print_inspect_report
 from .materialize_claude import materialize_session, launch_session
-from .materialize_codex import materialize_codex_session, launch_codex_session
 from .evidence.audit import run_audit
 from .lockfile import load_lock, verify_lock
 from .compat import compat_generate, compat_check
@@ -71,11 +73,9 @@ def _build_parser():
     p = sub.add_parser("mount", help="Mount operations")
     ps = p.add_subparsers(dest="mount_command")
 
-    c = ps.add_parser("create", help="Create a session mount")
+    c = ps.add_parser("create", help="Create a Claude Code session mount")
     c.add_argument("--pack", required=True, help="Path to the pack directory")
     c.add_argument("--repo", required=True, help="Target repository path")
-    c.add_argument("--harness", default="claude-code", choices=["claude-code", "codex"],
-                   help="Target harness (default: claude-code)")
     c.add_argument("--skill", action="append", default=None,
                    help="Skill ID to expose (repeatable)")
 
@@ -86,11 +86,9 @@ def _build_parser():
     r.add_argument("session_dir", help="Session directory path or session ID")
 
     # run
-    p = sub.add_parser("run", help="Materialize and launch a session")
+    p = sub.add_parser("run", help="Materialize and launch a Claude Code session")
     p.add_argument("--pack", required=True, help="Path to the pack directory")
     p.add_argument("--repo", required=True, help="Target repository path")
-    p.add_argument("--harness", default="claude-code", choices=["claude-code", "codex"],
-                   help="Target harness (default: claude-code)")
     p.add_argument("--skill", action="append", default=None,
                    help="Skill ID to expose (repeatable)")
     p.add_argument("--dry-run", action="store_true",
@@ -149,14 +147,17 @@ def _build_parser():
     kp = ps.add_parser("pull", help="Pull project knowledge docs to central store")
     kp.add_argument("--repo", required=True, help="Target repository path")
     kp.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
+    kp.add_argument("--manifest", default=None, help="Knowledge manifest JSON path")
 
     ks = ps.add_parser("status", help="Compare project knowledge docs with central store")
     ks.add_argument("--repo", required=True, help="Target repository path")
     ks.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
+    ks.add_argument("--manifest", default=None, help="Knowledge manifest JSON path")
 
     kpush = ps.add_parser("push", help="Push store documents back to project (recovery)")
     kpush.add_argument("--repo", required=True, help="Target repository path")
     kpush.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
+    kpush.add_argument("--manifest", default=None, help="Knowledge manifest JSON path")
     kpush.add_argument("--force", action="store_true", help="Override conflicts")
 
     # docs export-human / lint-human
@@ -171,6 +172,8 @@ def _build_parser():
     dl.add_argument("--source", required=True, help="Documentation root or export directory")
     dl.add_argument("--config", default=None, help="JSON config path")
     dl.add_argument("--all-markdown", action="store_true", help="Lint every Markdown file below source")
+    dk = ps.add_parser("lint-knowledge", help="Lint knowledge metadata and doc_refs")
+    dk.add_argument("--source", required=True, help="Documentation root")
 
     return parser
 
@@ -237,26 +240,8 @@ def _cmd_mount_create(args):
     if exit_code:
         return 1
 
-    if args.harness == "codex":
-        try:
-            info = materialize_codex_session(pack_dir, str(repo), args.harness, skill_filter=args.skill)
-        except ValueError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            return 1
-
-        mp = info["mount_plan"]
-        print(f"Session materialized: {info['session_id']}", file=sys.stderr)
-        print(f"  Harness: codex", file=sys.stderr)
-        print(f"  Dir:     {info['session_dir']}", file=sys.stderr)
-        print(f"  Profile: {info['profile_name']}", file=sys.stderr)
-        print(f"  Repo:    {mp['repo']['path']}", file=sys.stderr)
-        print(f"  Lock:    {info['lock']['pack_lock_hash']}", file=sys.stderr)
-        print(f"  Skills:  {', '.join(mp['skills']['exposed'])}", file=sys.stderr)
-        return 0
-
-    # default: claude-code
     try:
-        info = materialize_session(pack_dir, str(repo), args.harness, skill_filter=args.skill)
+        info = materialize_session(pack_dir, str(repo), skill_filter=args.skill)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -350,17 +335,8 @@ def _cmd_run(args):
     if exit_code:
         return 1
 
-    if args.harness == "codex":
-        try:
-            info = materialize_codex_session(pack_dir, str(repo), args.harness, skill_filter=args.skill)
-        except ValueError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            return 1
-        return launch_codex_session(info, dry_run=args.dry_run)
-
-    # default: claude-code
     try:
-        info = materialize_session(pack_dir, str(repo), args.harness, skill_filter=args.skill)
+        info = materialize_session(pack_dir, str(repo), skill_filter=args.skill)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -543,22 +519,22 @@ def _cmd_knowledge_pull(args):
         print(f"Error: repository not found: {repo}", file=sys.stderr)
         return 1
     store = Path(args.store) if args.store else None
+    manifest = Path(args.manifest).resolve() if args.manifest else None
 
     try:
-        result = knowledge_pull(repo, store=store)
+        result = knowledge_pull(repo, store=store, manifest_path=manifest)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
     print(f"Knowledge pull: COMPLETE", file=sys.stderr)
     print(f"  Project:  {result['project_id']}", file=sys.stderr)
-    print(f"  Total:    {result['total']} files in docs/Knowledge/", file=sys.stderr)
+    print(f"  Total:    {result['total']} configured knowledge files", file=sys.stderr)
     print(f"  New:      {len(result['new'])}", file=sys.stderr)
     print(f"  Modified: {len(result['modified'])}", file=sys.stderr)
     print(f"  Deleted:  {len(result['deleted'])}", file=sys.stderr)
     print(f"  Conflicts:{len(result['conflicted'])}", file=sys.stderr)
     print(f"  Pulled:   {len(result['pulled'])}", file=sys.stderr)
-    print(f"  Synced commit: {result['last_synced_commit'][:12]}...", file=sys.stderr)
     return 0
 
 
@@ -568,17 +544,16 @@ def _cmd_knowledge_status(args):
         print(f"Error: repository not found: {repo}", file=sys.stderr)
         return 1
     store = Path(args.store) if args.store else None
+    manifest = Path(args.manifest).resolve() if args.manifest else None
 
     try:
-        result = knowledge_status(repo, store=store)
+        result = knowledge_status(repo, store=store, manifest_path=manifest)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
     print(f"Knowledge status for {result['project_name']}", file=sys.stderr)
     print(f"  Project: {result['project_id']}", file=sys.stderr)
-    print(f"  Last sync: {result['last_synced_at'] or 'never'}", file=sys.stderr)
-    print(f"  Commit:    {result['last_synced_commit'][:12] if result['last_synced_commit'] else 'unknown'}", file=sys.stderr)
     print(f"  Synced:  {len(result['synced'])}", file=sys.stderr)
     print(f"  New:     {len(result['new'])}", file=sys.stderr)
     if result['new']:
@@ -587,6 +562,10 @@ def _cmd_knowledge_status(args):
     print(f"  Modified: {len(result['modified'])}", file=sys.stderr)
     if result['modified']:
         for p in result['modified']:
+            print(f"    ~ {p}", file=sys.stderr)
+    print(f"  Store modified: {len(result['store_modified'])}", file=sys.stderr)
+    if result['store_modified']:
+        for p in result['store_modified']:
             print(f"    ~ {p}", file=sys.stderr)
     print(f"  Deleted: {len(result['deleted'])}", file=sys.stderr)
     if result['deleted']:
@@ -639,15 +618,22 @@ def _cmd_docs_lint_human(args):
     return 1 if errors else 0
 
 
+def _cmd_docs_lint_knowledge(args):
+    errors = lint_knowledge(Path(args.source).resolve())
+    print(format_knowledge_lint_errors(errors), file=sys.stderr)
+    return 1 if errors else 0
+
+
 def _cmd_knowledge_push(args):
     repo = Path(args.repo).resolve()
     if not repo.exists():
         print(f"Error: repository not found: {repo}", file=sys.stderr)
         return 1
     store = Path(args.store) if args.store else None
+    manifest = Path(args.manifest).resolve() if args.manifest else None
 
     try:
-        result = knowledge_push(repo, store=store, force=args.force)
+        result = knowledge_push(repo, store=store, force=args.force, manifest_path=manifest)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -688,6 +674,7 @@ _DISPATCH = {
     ("knowledge", "push"): _cmd_knowledge_push,
     ("docs", "export-human"): _cmd_docs_export_human,
     ("docs", "lint-human"): _cmd_docs_lint_human,
+    ("docs", "lint-knowledge"): _cmd_docs_lint_knowledge,
 }
 
 
@@ -704,9 +691,4 @@ def main():
     if handler:
         return handler(args)
 
-    parser.print_help(sys.stderr)
-    return 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    pass

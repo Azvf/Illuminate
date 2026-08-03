@@ -131,6 +131,10 @@ class TestDocsExport(unittest.TestCase):
         ])
         self.assertEqual(lint_args.docs_command, "lint-human")
         self.assertTrue(lint_args.all_markdown)
+        knowledge_args = parser.parse_args([
+            "docs", "lint-knowledge", "--source", "docs"
+        ])
+        self.assertEqual(knowledge_args.docs_command, "lint-knowledge")
 
     def test_cli_handler_exports_source(self):
         with tempfile.TemporaryDirectory() as tmp:
