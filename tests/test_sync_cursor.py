@@ -633,6 +633,81 @@ class TestSyncCursor(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("hash mismatch" in i for i in issues), issues)
 
+    # ── Duplicate (double) illuminate block: no double rule source ──
+
+    def _append_second_modified_block(self, agents_path: Path) -> None:
+        """Append a second illuminate block (modified content) after the first,
+        leaving the first block untouched. Mirrors the defect reproduction:
+        a compat sync wrote one block, then a user/old harness appended a
+        second modified block."""
+        content = agents_path.read_text(encoding="utf-8")
+        lines = content.split("\n")
+        begin = next(
+            i for i, l in enumerate(lines) if l.strip().startswith(_BEGIN_MARKER)
+        )
+        end = next(i for i, l in enumerate(lines) if l.strip() == _END_MARKER)
+        first_block = lines[begin:end + 1]
+        second_block = [
+            l.replace("Synchronized skills:", "Synchronized skillz:")
+            if l.strip() else l
+            for l in first_block
+        ]
+        modified = "\n".join(lines[:end + 1] + [""] + second_block + lines[end + 1:])
+        agents_path.write_text(modified, encoding="utf-8")
+
+    def test_compat_to_default_switch_aborts_on_duplicate_block(self):
+        """When AGENTS.md carries two illuminate blocks (first untouched, second
+        modified), switching compat->default must abort before any write and
+        never produce core.mdc, so no double rule source is created."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+        self.assertEqual(agents_path.read_text(encoding="utf-8").count(_BEGIN_MARKER), 1)
+        lock_before = (repo / ".illuminate" / "cursor-lock.json").read_bytes()
+
+        self._append_second_modified_block(agents_path)
+        self.assertEqual(agents_path.read_text(encoding="utf-8").count(_BEGIN_MARKER), 2)
+
+        with self.assertRaises(ValueError):
+            sync_cursor(CORE_PACK, repo)
+
+        # Fail-before-write: no core.mdc, lock byte-identical, both blocks kept.
+        self.assertFalse((repo / _RULES_REL).exists())
+        self.assertEqual(
+            (repo / ".illuminate" / "cursor-lock.json").read_bytes(), lock_before
+        )
+        self.assertEqual(agents_path.read_text(encoding="utf-8").count(_BEGIN_MARKER), 2)
+
+    def test_check_compat_detects_duplicate_block(self):
+        """check_sync in compat mode must flag a duplicate block as a hash
+        mismatch rather than silently treating the (untouched) first block as
+        clean."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+        self._append_second_modified_block(agents_path)
+
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertFalse(ok)
+        self.assertTrue(any("hash mismatch" in i for i in issues), issues)
+
+    def test_clean_compat_preserves_duplicate_block(self):
+        """clean must not remove a block when AGENTS.md holds a duplicate: the
+        all-blocks hash no longer matches the lock, so both blocks are
+        preserved (fail-safe) instead of deleting the first and leaving the
+        second as residue."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+        self._append_second_modified_block(agents_path)
+
+        clean_sync(repo)
+
+        self.assertEqual(agents_path.read_text(encoding="utf-8").count(_BEGIN_MARKER), 2)
+
     def test_agents_compat_does_not_remove_codex_block_clean(self):
         """Compat-mode Cursor clean removes only its own block content when
         Codex also writes to the same AGENTS.md."""

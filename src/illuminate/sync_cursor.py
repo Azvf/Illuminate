@@ -47,6 +47,7 @@ from .hashutil import hash_file, hash_directory, lock_hash
 from .lockfile import build_lock_envelope
 from .managed_block import (
     BEGIN_MARKER as _BEGIN_MARKER,
+    count_blocks,
     hash_block_text,
     merge_block,
     remove_block,
@@ -286,7 +287,14 @@ def _old_agents_block_state(repo_root: Path, lock: dict) -> str:
     agents_path = repo_root / "AGENTS.md"
     if not agents_path.exists():
         return "taken_over"
-    current_block_hash = hash_block_text(agents_path.read_text(encoding="utf-8"))
+    content = agents_path.read_text(encoding="utf-8")
+    # More than one illuminate block means the repository carries a duplicate
+    # rule source. Never try to retire just the first block and leave the
+    # second behind — that is exactly the double-rule-source defect. Abort so
+    # the user can remove the duplicate by hand.
+    if count_blocks(content) > 1:
+        return "conflict"
+    current_block_hash = hash_block_text(content)
     if current_block_hash is None:
         return "taken_over"
     if current_block_hash == prev_hash:
