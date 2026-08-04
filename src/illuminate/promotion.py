@@ -354,7 +354,7 @@ def _published_artifact(pack_dir: Path, record: dict) -> Path:
     return (pack_dir / target_path).resolve()
 
 
-def _assert_owns_published(pack_dir: Path, record: dict) -> None:
+def _verify_ownership(pack_dir: Path, record: dict, published: dict) -> None:
     """Verify the pack artifact a candidate published is still the exact bytes
     it promoted.
 
@@ -364,15 +364,9 @@ def _assert_owns_published(pack_dir: Path, record: dict) -> None:
     artifact was taken over by a later promotion (e.g. a --force overwrite of
     the same path by an unrelated candidate), so this candidate no longer owns
     it. Raises PromotionError so the caller never deletes/upgrades bytes that
-    are not its own.
+    are not its own. ``published`` is the snapshot dict to verify against.
     """
     pack_dir = Path(pack_dir)
-    published = record.get("published")
-    if not published:
-        raise PromotionError(
-            f"candidate {record.get('id')} has no published snapshot; "
-            "cannot verify artifact ownership"
-        )
     entry_id = published.get("entry_id")
     target_path = published.get("target_path")
     content_sha256 = published.get("content_sha256")
@@ -445,6 +439,118 @@ def _assert_owns_published(pack_dir: Path, record: dict) -> None:
             f"published {content_sha256[:12]}; it has been taken over by a "
             "subsequent promotion"
         )
+
+
+def _assert_owns_published(pack_dir: Path, record: dict) -> None:
+    """Verify the pack artifact a candidate published is still the exact bytes
+    it promoted (see ``_verify_ownership``). Raises if the record has no
+    ``published`` snapshot (legacy entries predating snapshot recording)."""
+    pack_dir = Path(pack_dir)
+    published = record.get("published")
+    if not published:
+        raise PromotionError(
+            f"candidate {record.get('id')} has no published snapshot; "
+            "cannot verify artifact ownership"
+        )
+    _verify_ownership(pack_dir, record, published)
+
+
+def _rebuild_published(pack_dir: Path, record: dict) -> dict:
+    """Reconstruct a ``published`` snapshot for a legacy promoted candidate that
+    predates published-snapshot recording, so it can be superseded.
+
+    Safety: this binds ONLY the manifest/index entry that currently maps to
+    ``record['target_path']`` and the disk file at that path. It refuses if no
+    entry maps to the path, or if the file's bytes no longer hash to the
+    candidate's reviewed bytes (``reviewed_sha256``, falling back to
+    ``source_sha256``) — a sign the artifact was taken over by a later
+    promotion. The caller persists the rebuilt snapshot only after the removal
+    succeeds, so a failed supersede never records a fabricated snapshot.
+    """
+    pack_dir = Path(pack_dir)
+    target = record.get("target")
+    target_path = record.get("target_path")
+    if target not in _TARGETS or not target_path:
+        raise PromotionError(
+            f"cannot rebuild published snapshot for {record.get('id')}: "
+            "record has no target/target_path"
+        )
+    manifest = _read_json(pack_dir / "pack.json")
+    entry_id = None
+    if target == "reference":
+        entry = next(
+            (r for r in manifest.get("references", [])
+             if r.get("path") == target_path), None
+        )
+        if entry is None:
+            raise PromotionError(
+                f"cannot rebuild published snapshot for {record.get('id')}: "
+                f"no reference entry maps to {target_path}; refusing to "
+                "supersede an artifact this candidate does not own"
+            )
+        entry_id = entry.get("id")
+        file_path = pack_dir / entry["path"]
+    elif target == "policy":
+        index_rel = manifest.get("policies", {}).get("index", "policies/index.json")
+        index = _read_json_governance(pack_dir / index_rel)
+        rel = Path(target_path).relative_to("policies").as_posix()
+        entry = next(
+            (p for p in index.get("policies", []) if p.get("path") == rel), None
+        )
+        if entry is None:
+            raise PromotionError(
+                f"cannot rebuild published snapshot for {record.get('id')}: "
+                f"no policy entry maps to {target_path}; refusing to supersede "
+                "an artifact this candidate does not own"
+            )
+        entry_id = entry.get("id")
+        file_path = pack_dir / "policies" / entry["path"]
+    elif target == "skill":
+        dir_rel = Path(target_path).parent.as_posix()
+        entry = next(
+            (s for s in manifest.get("skills", []) if s.get("dir") == dir_rel), None
+        )
+        if entry is None:
+            raise PromotionError(
+                f"cannot rebuild published snapshot for {record.get('id')}: "
+                f"no skill entry maps to {dir_rel}; refusing to supersede an "
+                "artifact this candidate does not own"
+            )
+        entry_id = entry.get("id")
+        file_path = pack_dir / dir_rel / "SKILL.md"
+    elif target == "evidence":
+        config = manifest.get("evidence", {}).get("config")
+        if config != target_path:
+            raise PromotionError(
+                f"cannot rebuild published snapshot for {record.get('id')}: "
+                f"evidence config no longer points at {target_path}; refusing "
+                "to supersede an artifact this candidate does not own"
+            )
+        entry_id = target_path
+        file_path = pack_dir / config
+    else:  # pragma: no cover - guarded by _TARGETS
+        raise PromotionError(f"invalid target: {target}")
+
+    try:
+        current_sha = _content_sha256(file_path)
+    except OSError as exc:
+        raise PromotionError(
+            f"cannot read artifact {file_path} to rebuild published snapshot: {exc}"
+        ) from exc
+    expected = record.get("reviewed_sha256") or record.get("source_sha256")
+    if expected and current_sha != expected:
+        raise PromotionError(
+            f"cannot rebuild published snapshot for {record.get('id')}: "
+            f"{file_path} content hash {current_sha[:12]} does not match the "
+            "candidate's reviewed bytes; refusing to supersede taken-over content"
+        )
+    return {
+        "pack_id": _read_pack_id(pack_dir),
+        "target_path": target_path,
+        "entry_id": entry_id,
+        "content_sha256": current_sha,
+        "pack_version": record.get("pack_version") or _read_pack_version(pack_dir),
+    }
 
 
 def _assert_path_unclaimed(
@@ -776,6 +882,19 @@ def knowledge_promote(
             raise PromotionError(
                 f"--replaces is only supported for reference/policy targets "
                 f"(target is '{target}')"
+            )
+        # A --replaces upgrade replaces the predecessor's entry in place (it
+        # rewrites its id/path and removes the old artifact file). That is an
+        # overwrite, which only --force authorizes; --replaces and --force are
+        # orthogonal (explicit succession vs. permission to overwrite), but the
+        # former always performs an overwrite of the predecessor, so both are
+        # required. Without --force, the writer would otherwise append a second
+        # entry and leave the predecessor's artifact orphaned and unsupersed.
+        if not force:
+            raise PromotionError(
+                f"--replaces requires --force: upgrading the predecessor's pack "
+                f"entry in place (id/path change) overwrites existing content, "
+                f"which --force authorizes"
             )
         replaced_record = _find(candidates, replaces)
         if replaced_record["status"] != "promoted":
@@ -1119,9 +1238,19 @@ def _unpromote(pack_dir: Path, record: dict) -> None:
 
     # Ownership binding (P0-1): the current manifest entry and artifact bytes
     # must still be this candidate's published ones, else refuse to delete.
-    _assert_owns_published(pack_dir, record)
-    target_path = record["published"]["target_path"]
-    entry_id = record["published"]["entry_id"]
+    published = record.get("published")
+    if published is None:
+        # Legacy candidate promoted before published snapshots existed: rebuild
+        # the snapshot from the current manifest entry at target_path + the
+        # disk file, then verify ownership normally. Persisted only after the
+        # removal succeeds (see the tail of this function).
+        published = _rebuild_published(pack_dir, record)
+        rebuilt_published = True
+    else:
+        rebuilt_published = False
+    _verify_ownership(pack_dir, record, published)
+    target_path = published["target_path"]
+    entry_id = published["entry_id"]
 
     originals: Dict[Path, Optional[bytes]] = {}
     skill_dir: Optional[Path] = None
@@ -1143,7 +1272,11 @@ def _unpromote(pack_dir: Path, record: dict) -> None:
         _precheck_removable(to_remove)
         refs.remove(entry)
         _write_json(pack_path, manifest)
-        _unlink_if_exists(file_path)
+        try:
+            _unlink_if_exists(file_path)
+        except PromotionError:
+            _restore([], originals)
+            raise
 
     elif target == "policy":
         policies_meta = manifest.setdefault("policies", {})
@@ -1161,7 +1294,11 @@ def _unpromote(pack_dir: Path, record: dict) -> None:
         _precheck_removable(to_remove)
         policies.remove(entry)
         _write_json(index_path, index)
-        _unlink_if_exists(file_path)
+        try:
+            _unlink_if_exists(file_path)
+        except PromotionError:
+            _restore([], originals)
+            raise
 
     elif target == "skill":
         skills = manifest.setdefault("skills", [])
@@ -1178,7 +1315,14 @@ def _unpromote(pack_dir: Path, record: dict) -> None:
         skills.remove(entry)
         _write_json(pack_path, manifest)
         if skill_dir.exists():
-            shutil.rmtree(skill_dir)
+            try:
+                shutil.rmtree(skill_dir)
+            except OSError as exc:
+                _restore([], originals)
+                raise PromotionError(
+                    f"failed to remove skill directory {skill_dir} during supersede "
+                    f"({exc}); changes rolled back"
+                ) from exc
             if skill_dir.exists():
                 _restore([], originals)
                 raise PromotionError(
@@ -1199,7 +1343,11 @@ def _unpromote(pack_dir: Path, record: dict) -> None:
         _precheck_removable(to_remove)
         del evidence["config"]
         _write_json(pack_path, manifest)
-        _unlink_if_exists(file_path)
+        try:
+            _unlink_if_exists(file_path)
+        except PromotionError:
+            _restore([], originals)
+            raise
 
     ok, errors = validate_pack(pack_dir)
     if not ok:
@@ -1210,6 +1358,11 @@ def _unpromote(pack_dir: Path, record: dict) -> None:
             f"pack validation failed after supersede; changes rolled back: "
             f"{'; '.join(errors)}"
         )
+    if rebuilt_published:
+        # The removal succeeded; only now persist the reconstructed snapshot so
+        # a failed supersede never records a fabricated published block. The
+        # caller (knowledge_reject) saves the record after _unpromote returns.
+        record["published"] = published
 
 
 def knowledge_reject(

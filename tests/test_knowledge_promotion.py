@@ -1243,6 +1243,152 @@ class TestKnowledgePromotion(unittest.TestCase):
         candidate = _find(self.store, repo, c["id"])
         self.assertEqual(candidate["status"], "promoted")
 
+    # ── 28. P8: --replaces requires --force (P0 data integrity) ──
+
+    def test_replaces_without_force_rejected_no_side_effects(self):
+        # c1 promotes to references/demo.md. c2 declares --replaces c1 and is
+        # promoted to a NEW path without --force: must be rejected and leave
+        # pack + registry completely untouched (no duplicate entry, no orphan).
+        pack = _make_pack(Path(tempfile.mkdtemp()))
+        _make_repo(self.repo, "30-modules/demo.md", "# v1\n")
+        c1 = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                 store=self.store)
+        knowledge_review(self.repo, c1["id"], store=self.store)
+        knowledge_promote(self.repo, c1["id"], pack, store=self.store)
+        before_pack = (pack / "pack.json").read_bytes()
+        before_file = (pack / "references" / "demo.md").read_bytes()
+
+        _make_repo(self.repo, "30-modules/demo.md", "# v2\n")
+        c2 = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                 store=self.store, replaces=c1["id"])
+        knowledge_review(self.repo, c2["id"], store=self.store)
+        with self.assertRaises(PromotionError):
+            knowledge_promote(self.repo, c2["id"], pack, store=self.store,
+                              target_path="references/sub/b.md", force=False)
+        # No duplicate entry: manifest byte-identical to before.
+        self.assertEqual((pack / "pack.json").read_bytes(), before_pack)
+        self.assertTrue((pack / "references" / "demo.md").exists())
+        self.assertEqual((pack / "references" / "demo.md").read_bytes(), before_file)
+        # The target path was never created.
+        self.assertFalse((pack / "references" / "sub").exists())
+        # c1 still owns its artifact; neither c1 nor c2 changed status.
+        self.assertEqual(_find(self.store, self.repo, c1["id"])["status"], "promoted")
+        self.assertEqual(_find(self.store, self.repo, c2["id"])["status"], "reviewed")
+
+    def test_replaces_with_force_rename_upgrades(self):
+        # Regression: --replaces + --force performs the in-place renamed upgrade
+        # exactly once (single entry, old artifact removed, predecessor marked
+        # superseded).
+        pack = _make_pack(Path(tempfile.mkdtemp()))
+        _make_repo(self.repo, "30-modules/demo.md", "# v1\n")
+        c1 = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                 store=self.store)
+        knowledge_review(self.repo, c1["id"], store=self.store)
+        knowledge_promote(self.repo, c1["id"], pack, store=self.store)
+
+        _make_repo(self.repo, "30-modules/demo.md", "# v2\n")
+        c2 = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                 store=self.store, replaces=c1["id"])
+        knowledge_review(self.repo, c2["id"], store=self.store)
+        result = knowledge_promote(self.repo, c2["id"], pack, store=self.store,
+                                   target_path="references/sub/b.md", force=True)
+        self.assertEqual(result["status"], "promoted")
+        manifest = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(manifest["references"]), 1)
+        self.assertEqual(manifest["references"][0],
+                         {"id": "demo.pack.b", "path": "references/sub/b.md"})
+        self.assertFalse((pack / "references" / "demo.md").exists())
+        self.assertEqual((pack / "references" / "sub" / "b.md").read_text(encoding="utf-8"),
+                         "# v2\n")
+        self.assertEqual(_find(self.store, self.repo, c1["id"])["status"], "superseded")
+
+    # ── 29. P9: _unpromote deletion failure rolls back (P1) ──
+
+    def test_supersede_unlink_failure_rolls_back(self):
+        from unittest.mock import patch
+
+        cand = self._reviewed_candidate(content="# v1\n")
+        knowledge_promote(self.repo, cand["id"], self.pack, store=self.store)
+        file_path = self.pack / "references" / "demo.md"
+        before_pack = (self.pack / "pack.json").read_bytes()
+        before_file = file_path.read_bytes()
+
+        real_unlink = Path.unlink
+
+        def _failing_unlink(self_path, *args, **kwargs):
+            if self_path.resolve() == file_path.resolve():
+                raise OSError("disk full")
+            return real_unlink(self_path, *args, **kwargs)
+
+        with patch("pathlib.Path.unlink", _failing_unlink):
+            with self.assertRaises(PromotionError):
+                knowledge_reject(self.repo, cand["id"], store=self.store,
+                                 supersede=True, pack_dir=self.pack)
+        # Rolled back: manifest byte-identical, file restored, registry unchanged.
+        self.assertEqual((self.pack / "pack.json").read_bytes(), before_pack)
+        self.assertTrue(file_path.exists())
+        self.assertEqual(file_path.read_bytes(), before_file)
+        candidate = _find(self.store, self.repo, cand["id"])
+        self.assertEqual(candidate["status"], "promoted")
+
+    # ── 30. P10: legacy promoted without published snapshot can supersede ──
+
+    def test_legacy_promoted_without_published_can_supersede(self):
+        # A candidate promoted before published-snapshot recording has no
+        # ``published`` block. Supersede must rebuild the snapshot from the
+        # current manifest entry + disk file, verify ownership, and proceed.
+        cand = self._reviewed_candidate(content="# legacy\n")
+        knowledge_promote(self.repo, cand["id"], self.pack, store=self.store)
+        # Strip the published snapshot to simulate a legacy record.
+        import illuminate.promotion as promotion
+        record = _find(self.store, self.repo, cand["id"])
+        record.pop("published")
+        promotion._write_registry(
+            self.store / "projects" / _derive_project_id(self.repo),
+            [r for r in _candidates(self.store, self.repo) if r["id"] == record["id"]],
+        )
+        # Supersede succeeds and rebuilds the snapshot.
+        result = knowledge_reject(self.repo, cand["id"], store=self.store,
+                                  supersede=True, pack_dir=self.pack)
+        self.assertEqual(result["status"], "superseded")
+        self.assertFalse((self.pack / "references" / "demo.md").exists())
+        manifest = json.loads((self.pack / "pack.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["references"], [])
+        ok, errors = validate_pack(self.pack)
+        self.assertTrue(ok, errors)
+        # The rebuilt published snapshot was persisted on the record.
+        saved = _find(self.store, self.repo, cand["id"])
+        self.assertEqual(saved["published"]["entry_id"], "demo.pack.demo")
+        self.assertEqual(saved["published"]["target_path"], "references/demo.md")
+        self.assertEqual(saved["published"]["content_sha256"], _sha256("# legacy\n"))
+
+    def test_legacy_promoted_without_published_refuses_taken_over_content(self):
+        # If the artifact's bytes no longer match the candidate's reviewed
+        # bytes, a legacy record (no published snapshot) must refuse to
+        # supersede rather than silently delete taken-over content.
+        cand = self._reviewed_candidate(content="# v1\n")
+        knowledge_promote(self.repo, cand["id"], self.pack, store=self.store)
+        import illuminate.promotion as promotion
+        record = _find(self.store, self.repo, cand["id"])
+        record.pop("published")
+        promotion._write_registry(
+            self.store / "projects" / _derive_project_id(self.repo),
+            [r for r in _candidates(self.store, self.repo) if r["id"] == record["id"]],
+        )
+        # Take over the artifact with different bytes.
+        (self.pack / "references" / "demo.md").write_text("# other owner\n",
+                                                          encoding="utf-8")
+        with self.assertRaises(PromotionError):
+            knowledge_reject(self.repo, cand["id"], store=self.store,
+                             supersede=True, pack_dir=self.pack)
+        # The taken-over artifact is untouched and the record stays promoted.
+        self.assertEqual(
+            (self.pack / "references" / "demo.md").read_text(encoding="utf-8"),
+            "# other owner\n",
+        )
+        self.assertEqual(_find(self.store, self.repo, cand["id"])["status"],
+                         "promoted")
+
 
 if __name__ == "__main__":
     unittest.main()
