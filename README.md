@@ -112,7 +112,7 @@ Commands are grouped by the three layers: Core, Harness Adapters, and Governance
 | `illuminate knowledge pull --repo <path> [--store <dir>] [--manifest <json>]` | Pull configured project knowledge to central store |
 | `illuminate knowledge status --repo <path> [--store <dir>] [--manifest <json>]` | Compare configured project knowledge with central store |
 | `illuminate knowledge push --repo <path> [--store <dir>] [--manifest <json>] [--force]` | Push store documents back to project safely |
-| `illuminate knowledge candidate --repo <path> --source <path> --target <kind> [--anchor <ref>] [--notes <text>] [--store <dir>]` | Create a promotion candidate from a knowledge source with provenance |
+| `illuminate knowledge candidate --repo <path> --source <path> --target <kind> [--anchor <ref>] [--notes <text>] [--replaces <id>] [--store <dir>]` | Create a promotion candidate from a knowledge source with provenance |
 | `illuminate knowledge review --repo <path> --id <id> [--reviewer <name>] [--content <file>] [--notes <text>] [--store <dir>]` | Move a candidate from `raw` to `reviewed` |
 | `illuminate knowledge promote --repo <path> --id <id> --pack <dir> [--target-path <path>] [--dry-run] [--force] [--store <dir>]` | Promote a reviewed candidate into the Harness Pack |
 | `illuminate knowledge reject --repo <path> --id <id> [--reviewer <name>] [--superseded] [--pack <dir>] [--notes <text>] [--store <dir>]` | Reject a `raw`/`reviewed` candidate or mark a promoted one `superseded` (removing its pack artifact via `--pack`) |
@@ -263,6 +263,8 @@ Manifest registration per target:
 - `evidence` — sets `pack.json.evidence.config`.
 
 After writing, `promote` runs `validate_pack`; if validation fails the whole change (files + manifest + index) is rolled back. `--target-path` is narrowed to the target's directory (`references/`, `policies/`, `skills/`, `evidence/`) and cannot target governance/index files (`pack.json`, `*.schema.json`, `index.json`) even with `--force`. An existing pack file is only overwritten with `--force`; `--dry-run` writes nothing. For all four targets `--force` also upgrades an already-registered entry in place (reference/policy update their manifest/index path; skill/evidence were already supported): the old file is removed only after `validate_pack` succeeds, so a failed `--force` leaves the pack unchanged.
+
+Promoted candidates record a `published` snapshot (pack id, entry id, target path, content sha256, pack version). Superseding verifies ownership first: the current manifest entry and artifact bytes must still match what the candidate published. If a later `--force` promotion took over the artifact (same path/entry, different content), the original candidate refuses to supersede and never deletes bytes it no longer owns. For a renamed reference/policy upgrade (a new `--target-path` basename) declare the predecessor explicitly with `--replaces <id>` at `candidate` time; promote then upgrades the correct entry in place, refuses to overwrite an unrelated entry, and marks the replaced candidate `superseded` atomically with the new promotion.
 
 Promotion does not stage or commit. `promote` only writes into the Pack working tree; commits and PRs are left to Git and humans.
 

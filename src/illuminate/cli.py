@@ -19,7 +19,7 @@ Commands:
     illuminate knowledge pull --repo <path> [--store <dir>] [--manifest <json>]
     illuminate knowledge status --repo <path> [--store <dir>] [--manifest <json>]
     illuminate knowledge push --repo <path> [--store <dir>] [--manifest <json>] [--force]
-    illuminate knowledge candidate --repo <path> --source <path> --target <kind> [--anchor <ref>] [--notes <text>] [--store <dir>]
+    illuminate knowledge candidate --repo <path> --source <path> --target <kind> [--anchor <ref>] [--notes <text>] [--replaces <id>] [--store <dir>]
     illuminate knowledge review --repo <path> --id <id> [--reviewer <name>] [--content <path>] [--notes <text>] [--store <dir>]
     illuminate knowledge promote --repo <path> --id <id> --pack <dir> [--target-path <path>] [--dry-run] [--force] [--store <dir>]
     illuminate knowledge reject --repo <path> --id <id> [--reviewer <name>] [--superseded] [--pack <dir>] [--notes <text>] [--store <dir>]
@@ -201,6 +201,9 @@ def _build_parser():
                     help="Target pack content kind")
     kc.add_argument("--anchor", default=None, help="Anchor reference for the candidate")
     kc.add_argument("--notes", default=None, help="Free-form notes for the candidate")
+    kc.add_argument("--replaces", default=None,
+                    help="Already-promoted candidate id this one is the explicit successor of "
+                         "(enables a renamed reference/policy --force upgrade)")
     kc.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
 
     kr = ps.add_parser("review", help="Record a review verdict for a candidate")
@@ -828,6 +831,7 @@ def _cmd_knowledge_candidate(args):
             store=store,
             anchor=args.anchor,
             notes=args.notes,
+            replaces=args.replaces,
         )
     except PromotionError as e:
         print(f"Error: {e}", file=sys.stderr)

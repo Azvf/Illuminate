@@ -32,6 +32,7 @@ consumed by the pack or Cursor.
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -179,6 +180,18 @@ def _read_pack_version(pack_dir: Path) -> str:
     return str(data["version"])
 
 
+def _read_pack_id(pack_dir: Path) -> str:
+    """Return the pack id from pack.json (defaults to 'pack' like _derive_id)."""
+    pack_json = pack_dir / "pack.json"
+    try:
+        data = json.loads(pack_json.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PromotionError(f"invalid pack.json: {pack_json}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise PromotionError(f"invalid pack.json: {pack_json}")
+    return str(data.get("id", "pack"))
+
+
 def _resolve_within(root: Path, rel: str) -> str:
     """Resolve ``rel`` relative to ``root`` and reject path escape."""
     resolved = (root / rel).resolve()
@@ -316,6 +329,174 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
+def _content_sha256(path: Path) -> str:
+    """Hash a file's text content (newline-normalized, matching write_text)."""
+    return _sha256(path.read_text(encoding="utf-8"))
+
+
+def _published_artifact(pack_dir: Path, record: dict) -> Path:
+    """Return the absolute pack artifact path described by ``record``'s
+    ``published`` snapshot. Raises PromotionError if the snapshot is absent or
+    the record is malformed."""
+    published = record.get("published")
+    if not published:
+        raise PromotionError(
+            f"cannot verify artifact ownership: candidate {record.get('id')} "
+            "has no published snapshot (re-promote or repair the registry)"
+        )
+    target = record.get("target")
+    target_path = published.get("target_path")
+    if target not in _TARGETS or not target_path:
+        raise PromotionError(
+            f"cannot verify artifact ownership: invalid target/target_path "
+            f"(id={record.get('id')})"
+        )
+    return (pack_dir / target_path).resolve()
+
+
+def _assert_owns_published(pack_dir: Path, record: dict) -> None:
+    """Verify the pack artifact a candidate published is still the exact bytes
+    it promoted.
+
+    Binding is checked two ways: the manifest/index entry must still equal the
+    published entry (id + path/dir), and the artifact file's current content
+    must hash to the published ``content_sha256``. A mismatch means the
+    artifact was taken over by a later promotion (e.g. a --force overwrite of
+    the same path by an unrelated candidate), so this candidate no longer owns
+    it. Raises PromotionError so the caller never deletes/upgrades bytes that
+    are not its own.
+    """
+    pack_dir = Path(pack_dir)
+    published = record.get("published")
+    if not published:
+        raise PromotionError(
+            f"candidate {record.get('id')} has no published snapshot; "
+            "cannot verify artifact ownership"
+        )
+    entry_id = published.get("entry_id")
+    target_path = published.get("target_path")
+    content_sha256 = published.get("content_sha256")
+    if not entry_id or not target_path or not content_sha256:
+        raise PromotionError(
+            f"candidate {record.get('id')} published snapshot is incomplete; "
+            "cannot verify artifact ownership"
+        )
+
+    manifest = _read_json(pack_dir / "pack.json")
+    target = record.get("target")
+    if target == "reference":
+        entry = next(
+            (r for r in manifest.get("references", []) if r.get("id") == entry_id), None
+        )
+        if entry is None or entry.get("path") != target_path:
+            raise PromotionError(
+                f"artifact no longer owned by candidate {record.get('id')}: "
+                f"reference entry {entry_id} no longer maps to {target_path}; "
+                "it has been taken over by a subsequent promotion"
+            )
+        file_path = pack_dir / entry["path"]
+    elif target == "policy":
+        index_rel = manifest.get("policies", {}).get("index", "policies/index.json")
+        index = _read_json_governance(pack_dir / index_rel)
+        entry = next(
+            (p for p in index.get("policies", []) if p.get("id") == entry_id), None
+        )
+        rel = Path(target_path).relative_to("policies").as_posix()
+        if entry is None or entry.get("path") != rel:
+            raise PromotionError(
+                f"artifact no longer owned by candidate {record.get('id')}: "
+                f"policy entry {entry_id} no longer maps to {target_path}; "
+                "it has been taken over by a subsequent promotion"
+            )
+        file_path = pack_dir / "policies" / entry["path"]
+    elif target == "skill":
+        entry = next(
+            (s for s in manifest.get("skills", []) if s.get("id") == entry_id), None
+        )
+        dir_rel = Path(target_path).parent.as_posix()
+        if entry is None or entry.get("dir") != dir_rel:
+            raise PromotionError(
+                f"artifact no longer owned by candidate {record.get('id')}: "
+                f"skill entry {entry_id} no longer maps to {target_path}; "
+                "it has been taken over by a subsequent promotion"
+            )
+        file_path = pack_dir / dir_rel / "SKILL.md"
+    elif target == "evidence":
+        if manifest.get("evidence", {}).get("config") != target_path:
+            raise PromotionError(
+                f"artifact no longer owned by candidate {record.get('id')}: "
+                f"evidence config no longer points at {target_path}; "
+                "it has been taken over by a subsequent promotion"
+            )
+        file_path = pack_dir / target_path
+    else:
+        raise PromotionError(f"invalid target: {target}")
+
+    try:
+        current_sha = _content_sha256(file_path)
+    except OSError as exc:
+        raise PromotionError(
+            f"cannot read artifact {file_path} for ownership check: {exc}"
+        ) from exc
+    if current_sha != content_sha256:
+        raise PromotionError(
+            f"artifact no longer owned by candidate {record.get('id')}: "
+            f"{file_path} content hash {current_sha[:12]} does not match "
+            f"published {content_sha256[:12]}; it has been taken over by a "
+            "subsequent promotion"
+        )
+
+
+def _assert_path_unclaimed(
+    pack_dir: Path, target: str, written: str, replaced_record: dict
+) -> None:
+    """Guard a renamed upgrade: the new path/id must not already belong to a
+    third-party entry. The only permitted existing claim is the one this
+    candidate is replacing (whose published target_path is the old path). Any
+    other entry claiming the new id or the new path is refused so --force can
+    never overwrite an unrelated artifact."""
+    pack_dir = Path(pack_dir)
+    manifest = _read_json(pack_dir / "pack.json")
+    old_target = replaced_record["published"]["target_path"]
+    if written == old_target:
+        return
+    entry_id = _derive_id(manifest, Path(written).stem)
+    if target == "reference":
+        refs = manifest.get("references", [])
+        claimants = [
+            r for r in refs
+            if r.get("path") != old_target
+            and (r.get("id") == entry_id or r.get("path") == written)
+        ]
+        if claimants:
+            c = claimants[0]
+            raise PromotionError(
+                f"cannot upgrade {replaced_record.get('id')}: new path {written} "
+                f"(entry {entry_id}) is already owned by another reference "
+                f"(id {c.get('id')}, path {c.get('path')}); refusing to overwrite "
+                "an unrelated artifact"
+            )
+    elif target == "policy":
+        index_rel = manifest.get("policies", {}).get("index", "policies/index.json")
+        index = _read_json_governance(pack_dir / index_rel)
+        rel = Path(written).relative_to("policies").as_posix()
+        old_rel = Path(old_target).relative_to("policies").as_posix()
+        policies = index.get("policies", [])
+        claimants = [
+            p for p in policies
+            if p.get("path") != old_rel
+            and (p.get("id") == entry_id or p.get("path") == rel)
+        ]
+        if claimants:
+            c = claimants[0]
+            raise PromotionError(
+                f"cannot upgrade {replaced_record.get('id')}: new path {written} "
+                f"(entry {entry_id}) is already owned by another policy "
+                f"(id {c.get('id')}, path {c.get('path')}); refusing to overwrite "
+                "an unrelated artifact"
+            )
+
+
 def _stage_file(pack_dir: Path, written: str, content: str, force: bool):
     """Write a single knowledge file, tracking it for rollback.
 
@@ -395,12 +576,17 @@ def knowledge_candidate(
     store=None,
     anchor=None,
     notes=None,
+    replaces=None,
 ) -> dict:
     """Register a raw promotion candidate for a docs/ file.
 
     Records ``source_sha256`` (hash of the source at creation) and persists a
     content snapshot to ``promotions/<id>/source.md`` so later review/promote
     can verify byte-for-byte fidelity.
+
+    ``replaces`` optionally names an already-promoted candidate id this one is
+    an explicit successor of (used for a renamed --force upgrade). The owning
+    candidate is validated at promote time; here it is only stored.
     """
     repo_root = Path(repo_root).resolve()
     if target not in _TARGETS:
@@ -429,6 +615,7 @@ def knowledge_candidate(
         },
         "target": target,
         "target_path": None,
+        "replaces": replaces,
         "reviewer": None,
         "notes": notes,
         "generalized": False,
@@ -576,27 +763,70 @@ def knowledge_promote(
             "generalized": generalized,
         }
 
-    # The path this candidate was previously promoted to (None on first
-    # promote). Lets --force upgrade in place even when --target-path changed
-    # the filename, by locating the previous manifest/index entry by path.
-    previous_target_path = record.get("target_path")
+    # Explicit rename upgrade: the candidate declares a predecessor with
+    # --replaces. We resolve the predecessor's published artifact (must still
+    # be owned by it), and thread its previous path into the writer so a
+    # renamed --force upgrade updates the correct entry in place instead of
+    # guessing from the new stem or overwriting an unrelated entry.
+    replaces = record.get("replaces")
+    previous_target_path = None
+    replaced_record = None
+    if replaces:
+        if target not in ("reference", "policy"):
+            raise PromotionError(
+                f"--replaces is only supported for reference/policy targets "
+                f"(target is '{target}')"
+            )
+        replaced_record = _find(candidates, replaces)
+        if replaced_record["status"] != "promoted":
+            raise PromotionError(
+                f"replaced candidate '{replaces}' is in status "
+                f"'{replaced_record['status']}', expected 'promoted'"
+            )
+        _assert_owns_published(pack_dir, replaced_record)
+        previous_target_path = replaced_record["published"]["target_path"]
+        # The new artifact path must not already belong to a third party.
+        _assert_path_unclaimed(pack_dir, target, written, replaced_record)
+
     if target == "reference":
-        promote_reference(pack_dir, written, content, force, pack_version,
-                          previous_target_path)
+        written_result = promote_reference(pack_dir, written, content, force,
+                                           pack_version, previous_target_path)
     elif target == "policy":
-        promote_policy(pack_dir, written, content, force, pack_version,
-                       previous_target_path)
+        written_result = promote_policy(pack_dir, written, content, force,
+                                        pack_version, previous_target_path)
     elif target == "skill":
-        promote_skill(pack_dir, skill_name, content, force, pack_version)
+        written_result = promote_skill(pack_dir, skill_name, content, force,
+                                       pack_version)
     elif target == "evidence":
-        promote_evidence(pack_dir, written, content, force, pack_version)
+        written_result = promote_evidence(pack_dir, written, content, force,
+                                          pack_version)
+    else:  # pragma: no cover - guarded earlier by _TARGETS
+        raise PromotionError(f"invalid target: {target}")
 
     record["status"] = "promoted"
     record["target_path"] = written
     record["generalized"] = generalized
     record["pack_version"] = pack_version
+    record["published"] = {
+        "pack_id": _read_pack_id(pack_dir),
+        "target_path": written,
+        "entry_id": written_result["id"],
+        "content_sha256": content_sha256,
+        "pack_version": pack_version,
+    }
     record["updated_at"] = _now()
-    _save(project_dir, candidates, record)
+
+    # A promoted successor atomically supersedes its declared predecessor: the
+    # old entry was upgraded in place and the old candidate no longer owns the
+    # artifact. Both registry writes are in the same list, so one _write_registry
+    # persists the pair atomically.
+    if replaced_record is not None:
+        replaced_record["status"] = "superseded"
+        replaced_record["superseded_at"] = _now()
+        replaced_record["superseded_by"] = candidate_id
+        replaced_record["updated_at"] = _now()
+
+    _write_registry(project_dir, candidates)
 
     return {
         "candidate_id": candidate_id,
@@ -605,6 +835,7 @@ def knowledge_promote(
         "dry_run": False,
         "status": "promoted",
         "generalized": generalized,
+        "replaces": replaces,
     }
 
 
@@ -649,11 +880,20 @@ def promote_reference(pack_dir, written, content, force, pack_version,
     _validate_or_rollback(pack_dir, created, originals, written)
     # With --force the previous reference was replaced; if it is no longer
     # referenced by the manifest, remove the orphan file so a pack upgrade
-    # does not leave dead references behind.
+    # does not leave dead references behind. Orphan removal is part of the
+    # transaction: a failure rolls the whole promote back so pack and registry
+    # never diverge.
     if old_path and old_path != written:
         orphan = (pack_dir / old_path).resolve()
         if orphan.is_file() and orphan.is_relative_to(pack_dir.resolve()):
-            orphan.unlink()
+            try:
+                orphan.unlink()
+            except OSError as exc:
+                _restore(created, originals)
+                raise PromotionError(
+                    f"failed to remove orphaned reference {orphan}: {exc}; "
+                    "promotion rolled back"
+                ) from exc
     return {"written": written, "id": ref_id}
 
 
@@ -716,11 +956,19 @@ def promote_policy(pack_dir, written, content, force, pack_version,
     _validate_or_rollback(pack_dir, created, originals, written)
     # With --force the previous policy was replaced; if it is no longer
     # referenced by the index, remove the orphan file so a pack upgrade does
-    # not leave dead policies behind.
+    # not leave dead policies behind. Orphan removal is part of the transaction:
+    # a failure rolls the whole promote back so pack and registry never diverge.
     if old_path and old_path != Path(written).relative_to("policies").as_posix():
         orphan = (pack_dir / "policies" / old_path).resolve()
         if orphan.is_file() and orphan.is_relative_to(pack_dir.resolve()):
-            orphan.unlink()
+            try:
+                orphan.unlink()
+            except OSError as exc:
+                _restore(created, originals)
+                raise PromotionError(
+                    f"failed to remove orphaned policy {orphan}: {exc}; "
+                    "promotion rolled back"
+                ) from exc
     return {"written": written, "id": policy_id}
 
 
@@ -805,21 +1053,47 @@ def promote_evidence(pack_dir, written, content, force, pack_version) -> dict:
     _validate_or_rollback(pack_dir, created, originals, written)
     # With --force the previous config was replaced; if it is no longer
     # referenced by the manifest, remove the orphan file so a pack upgrade
-    # does not leave dead configs behind.
+    # does not leave dead configs behind. Orphan removal is part of the
+    # transaction: a failure rolls the whole promote back.
     if existing_config and existing_config != written:
         orphan = (pack_dir / existing_config).resolve()
         if orphan.is_file() and orphan.is_relative_to(pack_dir.resolve()):
-            orphan.unlink()
-    return {"written": written}
+            try:
+                orphan.unlink()
+            except OSError as exc:
+                _restore(created, originals)
+                raise PromotionError(
+                    f"failed to remove orphaned evidence config {orphan}: {exc}; "
+                    "promotion rolled back"
+                ) from exc
+    return {"written": written, "id": written}
 
 
 def _unlink_if_exists(path: Path) -> None:
-    """Best-effort delete a file; no-op if it is absent."""
+    """Delete a file; no-op if it is absent. Never silently swallows an error:
+    an OSError is surfaced as PromotionError so a partial supersede rolls back
+    instead of leaving pack and registry out of sync."""
     try:
         if path.exists():
             path.unlink()
-    except OSError:
-        pass
+    except OSError as exc:
+        raise PromotionError(f"failed to remove {path}: {exc}") from exc
+
+
+def _precheck_removable(paths) -> None:
+    """Verify every artifact path exists (or is an empty skill dir to remove)
+    and is writable before deletion begins, so a supersede fails fast rather
+    than half-deleting then rolling back mid-transaction."""
+    for p in paths:
+        if p is None:
+            continue
+        p = Path(p)
+        if not p.exists():
+            raise PromotionError(f"artifact to remove does not exist: {p}")
+        if p.is_dir():
+            continue
+        if not os.access(p, os.W_OK):
+            raise PromotionError(f"artifact is not writable, cannot remove: {p}")
 
 
 def _unpromote(pack_dir: Path, record: dict) -> None:
@@ -829,15 +1103,25 @@ def _unpromote(pack_dir: Path, record: dict) -> None:
     index registration, recording originals first. Runs validate_pack and, on
     failure, restores every recorded original and re-raises, so a failed
     supersede leaves the pack untouched and the registry unpromoted.
+
+    Ownership is bound: before removing anything, the current artifact is
+    verified against the candidate's ``published`` snapshot (manifest entry and
+    content hash). If it was taken over by a later promotion, supersede raises
+    and never deletes bytes it does not own.
     """
     pack_dir = Path(pack_dir)
     target = record.get("target")
-    target_path = record.get("target_path")
-    if target not in _TARGETS or not target_path:
+    if target not in _TARGETS:
         raise PromotionError(
             f"cannot locate pack artifact for supersede: record has no "
-            f"target/target_path (id={record.get('id')})"
+            f"target (id={record.get('id')})"
         )
+
+    # Ownership binding (P0-1): the current manifest entry and artifact bytes
+    # must still be this candidate's published ones, else refuse to delete.
+    _assert_owns_published(pack_dir, record)
+    target_path = record["published"]["target_path"]
+    entry_id = record["published"]["entry_id"]
 
     originals: Dict[Path, Optional[bytes]] = {}
     skill_dir: Optional[Path] = None
@@ -846,49 +1130,61 @@ def _unpromote(pack_dir: Path, record: dict) -> None:
     originals[pack_path] = _read_bytes_or_none(pack_path)
     manifest = _read_json(pack_path)
 
+    to_remove: List[Path] = []
+
     if target == "reference":
-        ref_id = _derive_id(manifest, Path(target_path).stem)
         refs = manifest.setdefault("references", [])
-        entry = next((r for r in refs if r.get("id") == ref_id), None)
+        entry = next((r for r in refs if r.get("id") == entry_id), None)
         if entry is None:
-            raise PromotionError(f"reference not registered in pack manifest: {ref_id}")
+            raise PromotionError(f"reference not registered in pack manifest: {entry_id}")
         file_path = pack_dir / entry["path"]
         originals[file_path] = _read_bytes_or_none(file_path)
+        to_remove.append(file_path)
+        _precheck_removable(to_remove)
         refs.remove(entry)
         _write_json(pack_path, manifest)
         _unlink_if_exists(file_path)
 
     elif target == "policy":
-        policy_id = _derive_id(manifest, Path(target_path).stem)
         policies_meta = manifest.setdefault("policies", {})
         index_rel = policies_meta.setdefault("index", "policies/index.json")
         index_path = pack_dir / index_rel
         originals[index_path] = _read_bytes_or_none(index_path)
         index = _read_json_governance(index_path)
         policies = index.setdefault("policies", [])
-        entry = next((p for p in policies if p.get("id") == policy_id), None)
+        entry = next((p for p in policies if p.get("id") == entry_id), None)
         if entry is None:
-            raise PromotionError(f"policy not registered in index: {policy_id}")
+            raise PromotionError(f"policy not registered in index: {entry_id}")
         file_path = pack_dir / "policies" / entry["path"]
         originals[file_path] = _read_bytes_or_none(file_path)
+        to_remove.append(file_path)
+        _precheck_removable(to_remove)
         policies.remove(entry)
         _write_json(index_path, index)
         _unlink_if_exists(file_path)
 
     elif target == "skill":
-        skill_name = Path(target_path).parent.name
-        skill_id = _derive_id(manifest, skill_name)
         skills = manifest.setdefault("skills", [])
-        entry = next((s for s in skills if s.get("id") == skill_id), None)
+        entry = next((s for s in skills if s.get("id") == entry_id), None)
         if entry is None:
-            raise PromotionError(f"skill not registered in pack manifest: {skill_id}")
+            raise PromotionError(f"skill not registered in pack manifest: {entry_id}")
         skill_dir = pack_dir / entry["dir"]
-        for f in skill_dir.rglob("*"):
-            if f.is_file():
-                originals[f] = _read_bytes_or_none(f)
+        if skill_dir.exists():
+            to_remove.append(skill_dir)
+            _precheck_removable(to_remove)
+            for f in skill_dir.rglob("*"):
+                if f.is_file():
+                    originals[f] = _read_bytes_or_none(f)
         skills.remove(entry)
         _write_json(pack_path, manifest)
-        shutil.rmtree(skill_dir, ignore_errors=True)
+        if skill_dir.exists():
+            shutil.rmtree(skill_dir)
+            if skill_dir.exists():
+                _restore([], originals)
+                raise PromotionError(
+                    f"failed to remove skill directory {skill_dir} during supersede; "
+                    "changes rolled back"
+                )
 
     elif target == "evidence":
         evidence = manifest.setdefault("evidence", {})
@@ -899,6 +1195,8 @@ def _unpromote(pack_dir: Path, record: dict) -> None:
             )
         file_path = pack_dir / config
         originals[file_path] = _read_bytes_or_none(file_path)
+        to_remove.append(file_path)
+        _precheck_removable(to_remove)
         del evidence["config"]
         _write_json(pack_path, manifest)
         _unlink_if_exists(file_path)

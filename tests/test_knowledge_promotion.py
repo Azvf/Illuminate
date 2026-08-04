@@ -995,27 +995,33 @@ class TestKnowledgePromotion(unittest.TestCase):
             knowledge_reject(repo, raw["id"], store=self.store, supersede=True,
                              pack_dir=Path(tempfile.mkdtemp()))
 
-    # ── 26. P6: --force upgrade in place when --target-path changes basename ──
+    # ── 26. P6: renamed reference/policy upgrade via explicit --replaces ──
 
-    def test_promote_reference_force_change_basename_via_previous_path(self):
-        # v1 occupies references/demo.md (id demo.pack.demo); force-upgrade the
-        # same artifact to a new basename references/sub/b.md. With the previous
-        # target_path threaded through, the old entry is upgraded in place and
-        # the old file is removed as an orphan (no duplicate).
+    def test_promote_reference_force_change_basename_via_replaces(self):
+        # v1 occupies references/demo.md (id demo.pack.demo). A successor
+        # candidate declares --replaces c1 and force-upgrades the SAME artifact
+        # to a new basename references/sub/b.md through the public
+        # candidate/review/promote flow (no manual previous_target_path).
         pack = _make_pack(Path(tempfile.mkdtemp()))
-        manifest = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
-        manifest.setdefault("references", []).append(
-            {"id": "demo.pack.demo", "path": "references/demo.md"}
+        _make_repo(self.repo, "30-modules/demo.md", "# old\n")
+        c1 = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                 store=self.store)
+        knowledge_review(self.repo, c1["id"], store=self.store)
+        knowledge_promote(self.repo, c1["id"], pack, store=self.store)
+        self.assertEqual(
+            (pack / "references" / "demo.md").read_text(encoding="utf-8"), "# old\n"
         )
-        (pack / "pack.json").write_text(json.dumps(manifest), encoding="utf-8")
-        (pack / "references").mkdir(exist_ok=True)
-        (pack / "references" / "demo.md").write_text("# old\n", encoding="utf-8")
 
-        result = promote_reference(
-            pack, "references/sub/b.md", "# new\n", True, "0.1.0",
-            previous_target_path="references/demo.md",
-        )
-        self.assertEqual(result["id"], "demo.pack.b")
+        # Changed content -> a different candidate id, same source path/target.
+        _make_repo(self.repo, "30-modules/demo.md", "# new\n")
+        c2 = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                 store=self.store, replaces=c1["id"])
+        self.assertNotEqual(c1["id"], c2["id"])
+        knowledge_review(self.repo, c2["id"], store=self.store)
+        result = knowledge_promote(self.repo, c2["id"], pack, store=self.store,
+                                   target_path="references/sub/b.md", force=True)
+        self.assertEqual(result["status"], "promoted")
+        self.assertEqual(result["written"], "references/sub/b.md")
         manifest = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
         self.assertEqual(len(manifest["references"]), 1)
         self.assertEqual(
@@ -1028,24 +1034,35 @@ class TestKnowledgePromotion(unittest.TestCase):
         )
         ok, errors = validate_pack(pack)
         self.assertTrue(ok, errors)
+        # The replaced candidate is atomically marked superseded.
+        c1_after = _find(self.store, self.repo, c1["id"])
+        self.assertEqual(c1_after["status"], "superseded")
+        self.assertEqual(c1_after.get("superseded_by"), c2["id"])
+        # The successor recorded a published snapshot.
+        c2_after = _find(self.store, self.repo, c2["id"])
+        self.assertEqual(c2_after["published"]["entry_id"], "demo.pack.b")
+        self.assertEqual(c2_after["published"]["target_path"], "references/sub/b.md")
 
-    def test_promote_policy_force_change_basename_via_previous_path(self):
-        # v1 occupies policies/rule.md (id demo.pack.rule); force-upgrade the
-        # same artifact to policies/renamed.md, updating the index entry in
-        # place and removing the old file.
+    def test_promote_policy_force_change_basename_via_replaces(self):
+        # v1 occupies policies/rule.md (id demo.pack.rule); a successor
+        # candidate with --replaces c1 upgrades the same artifact in place to
+        # policies/renamed.md through the public flow.
         pack = _make_pack(Path(tempfile.mkdtemp()))
-        index_path = pack / "policies" / "index.json"
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-        index["policies"].append({"id": "demo.pack.rule", "path": "rule.md", "priority": 0})
-        index_path.write_text(json.dumps(index), encoding="utf-8")
-        (pack / "policies" / "rule.md").write_text("# old rule\n", encoding="utf-8")
+        _make_repo(self.repo, "30-modules/rule.md", "# Rule v1\n")
+        c1 = knowledge_candidate(self.repo, "30-modules/rule.md", "policy",
+                                 store=self.store)
+        knowledge_review(self.repo, c1["id"], store=self.store)
+        knowledge_promote(self.repo, c1["id"], pack, store=self.store)
 
-        result = promote_policy(
-            pack, "policies/renamed.md", "# new rule\n", True, "0.1.0",
-            previous_target_path="policies/rule.md",
-        )
-        self.assertEqual(result["id"], "demo.pack.renamed")
-        index = json.loads(index_path.read_text(encoding="utf-8"))
+        _make_repo(self.repo, "30-modules/rule.md", "# Rule v2\n")
+        c2 = knowledge_candidate(self.repo, "30-modules/rule.md", "policy",
+                                 store=self.store, replaces=c1["id"])
+        self.assertNotEqual(c1["id"], c2["id"])
+        knowledge_review(self.repo, c2["id"], store=self.store)
+        result = knowledge_promote(self.repo, c2["id"], pack, store=self.store,
+                                   target_path="policies/renamed.md", force=True)
+        self.assertEqual(result["written"], "policies/renamed.md")
+        index = json.loads((pack / "policies" / "index.json").read_text(encoding="utf-8"))
         self.assertEqual(len(index["policies"]), 1)
         self.assertEqual(
             index["policies"][0],
@@ -1053,10 +1070,144 @@ class TestKnowledgePromotion(unittest.TestCase):
         )
         self.assertFalse((pack / "policies" / "rule.md").exists())
         self.assertEqual(
-            (pack / "policies" / "renamed.md").read_text(encoding="utf-8"), "# new rule\n"
+            (pack / "policies" / "renamed.md").read_text(encoding="utf-8"), "# Rule v2\n"
         )
         ok, errors = validate_pack(pack)
         self.assertTrue(ok, errors)
+        c1_after = _find(self.store, self.repo, c1["id"])
+        self.assertEqual(c1_after["status"], "superseded")
+        self.assertEqual(c1_after.get("superseded_by"), c2["id"])
+
+    def test_replaces_refuses_overwriting_unrelated_reference(self):
+        # A third-party entry already owns the new path/id; a renamed upgrade
+        # with --replaces must refuse rather than overwrite it.
+        pack = _make_pack(Path(tempfile.mkdtemp()))
+        _make_repo(self.repo, "30-modules/demo.md", "# v1\n")
+        c1 = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                 store=self.store)
+        knowledge_review(self.repo, c1["id"], store=self.store)
+        knowledge_promote(self.repo, c1["id"], pack, store=self.store)
+        # A separate reference already occupies the target new path.
+        _make_repo(self.repo, "30-modules/other.md", "# other\n")
+        other = knowledge_candidate(self.repo, "30-modules/other.md", "reference",
+                                    store=self.store)
+        knowledge_review(self.repo, other["id"], store=self.store)
+        knowledge_promote(self.repo, other["id"], pack, store=self.store,
+                          target_path="references/b.md")
+        # c2 tries to take over references/b.md as a rename of c1.
+        _make_repo(self.repo, "30-modules/demo.md", "# v2\n")
+        c2 = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                 store=self.store, replaces=c1["id"])
+        knowledge_review(self.repo, c2["id"], store=self.store)
+        with self.assertRaises(PromotionError):
+            knowledge_promote(self.repo, c2["id"], pack, store=self.store,
+                              target_path="references/b.md", force=True)
+        # The unrelated reference is untouched.
+        self.assertEqual(
+            (pack / "references" / "b.md").read_text(encoding="utf-8"), "# other\n"
+        )
+        c2_after = _find(self.store, self.repo, c2["id"])
+        self.assertEqual(c2_after["status"], "reviewed")
+
+    def test_replaces_refuses_overwriting_unrelated_policy(self):
+        # A third-party policy already owns the new path/id; a renamed upgrade
+        # with --replaces must refuse rather than overwrite it.
+        pack = _make_pack(Path(tempfile.mkdtemp()))
+        _make_repo(self.repo, "30-modules/rule.md", "# Rule v1\n")
+        c1 = knowledge_candidate(self.repo, "30-modules/rule.md", "policy",
+                                 store=self.store)
+        knowledge_review(self.repo, c1["id"], store=self.store)
+        knowledge_promote(self.repo, c1["id"], pack, store=self.store)
+        # A separate policy already occupies the target new path/id.
+        _make_repo(self.repo, "30-modules/renamed.md", "# Other rule\n")
+        other = knowledge_candidate(self.repo, "30-modules/renamed.md", "policy",
+                                    store=self.store)
+        knowledge_review(self.repo, other["id"], store=self.store)
+        knowledge_promote(self.repo, other["id"], pack, store=self.store,
+                          target_path="policies/renamed.md")
+        # c2 tries to take over policies/renamed.md as a rename of c1.
+        _make_repo(self.repo, "30-modules/rule.md", "# Rule v2\n")
+        c2 = knowledge_candidate(self.repo, "30-modules/rule.md", "policy",
+                                 store=self.store, replaces=c1["id"])
+        knowledge_review(self.repo, c2["id"], store=self.store)
+        with self.assertRaises(PromotionError):
+            knowledge_promote(self.repo, c2["id"], pack, store=self.store,
+                              target_path="policies/renamed.md", force=True)
+        # The unrelated policy is untouched.
+        self.assertEqual(
+            (pack / "policies" / "renamed.md").read_text(encoding="utf-8"),
+            "# Other rule\n",
+        )
+        c2_after = _find(self.store, self.repo, c2["id"])
+        self.assertEqual(c2_after["status"], "reviewed")
+
+    def test_replaces_requires_promoted_predecessor(self):
+        # --replaces pointing at a non-promoted candidate is rejected at promote.
+        _make_repo(self.repo, "30-modules/demo.md", "# v1\n")
+        raw = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                  store=self.store)
+        _make_repo(self.repo, "30-modules/demo.md", "# v2\n")
+        c2 = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                 store=self.store, replaces=raw["id"])
+        knowledge_review(self.repo, c2["id"], store=self.store)
+        with self.assertRaises(PromotionError):
+            knowledge_promote(self.repo, c2["id"], self.pack, store=self.store, force=True)
+
+    # ── 26b. P0-1: ownership binding prevents deleting another version's bytes ──
+
+    def test_supersede_refuses_when_artifact_taken_over_by_later_force(self):
+        # v1 promote -> v2 --force overwrites the same path (same stem, same
+        # manifest entry id). Superseding v1 must refuse: the artifact now holds
+        # v2's bytes, which v1 no longer owns.
+        cand = self._reviewed_candidate(content="# v1\n")
+        knowledge_promote(self.repo, cand["id"], self.pack, store=self.store)
+        _make_repo(self.repo, content="# v2\n")
+        c2 = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                 store=self.store)
+        knowledge_review(self.repo, c2["id"], store=self.store)
+        knowledge_promote(self.repo, c2["id"], self.pack, store=self.store, force=True)
+        self.assertEqual(
+            (self.pack / "references" / "demo.md").read_text(encoding="utf-8"), "# v2\n"
+        )
+        # Superseding v1 refuses; the artifact (v2's content) is untouched.
+        with self.assertRaises(PromotionError):
+            knowledge_reject(self.repo, cand["id"], store=self.store,
+                             supersede=True, pack_dir=self.pack)
+        self.assertTrue((self.pack / "references" / "demo.md").exists())
+        self.assertEqual(
+            (self.pack / "references" / "demo.md").read_text(encoding="utf-8"), "# v2\n"
+        )
+        # v1 stays promoted (its artifact was not removed).
+        self.assertEqual(
+            _find(self.store, self.repo, cand["id"])["status"], "promoted"
+        )
+        # v2 still owns the artifact and superseding v2 removes it cleanly.
+        result = knowledge_reject(self.repo, c2["id"], store=self.store,
+                                  supersede=True, pack_dir=self.pack)
+        self.assertEqual(result["status"], "superseded")
+        self.assertFalse((self.pack / "references" / "demo.md").exists())
+        manifest = json.loads((self.pack / "pack.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["references"], [])
+        ok, errors = validate_pack(self.pack)
+        self.assertTrue(ok, errors)
+
+    def test_supersede_records_published_snapshot(self):
+        # A successful promote records the published snapshot (pack id, entry
+        # id, target path, content sha256, pack version).
+        cand = self._reviewed_candidate(content="# snap\n")
+        knowledge_promote(self.repo, cand["id"], self.pack, store=self.store)
+        candidate = _find(self.store, self.repo, cand["id"])
+        published = candidate.get("published")
+        self.assertIsNotNone(published)
+        self.assertEqual(published["pack_id"], "demo.pack")
+        self.assertEqual(published["entry_id"], "demo.pack.demo")
+        self.assertEqual(published["target_path"], "references/demo.md")
+        self.assertEqual(published["content_sha256"], _sha256("# snap\n"))
+        self.assertEqual(published["pack_version"], "0.1.0")
+        # And a normal supersede (still owning the bytes) succeeds.
+        result = knowledge_reject(self.repo, cand["id"], store=self.store,
+                                  supersede=True, pack_dir=self.pack)
+        self.assertEqual(result["status"], "superseded")
 
     # ── 27. P7: skill supersede rollback restores nested files ──
 
