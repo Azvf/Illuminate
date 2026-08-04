@@ -22,7 +22,7 @@ Commands:
     illuminate knowledge candidate --repo <path> --source <path> --target <kind> [--anchor <ref>] [--notes <text>] [--store <dir>]
     illuminate knowledge review --repo <path> --id <id> [--reviewer <name>] [--content <path>] [--notes <text>] [--store <dir>]
     illuminate knowledge promote --repo <path> --id <id> --pack <dir> [--target-path <path>] [--dry-run] [--force] [--store <dir>]
-    illuminate knowledge reject --repo <path> --id <id> [--reviewer <name>] [--superseded] [--notes <text>] [--store <dir>]
+    illuminate knowledge reject --repo <path> --id <id> [--reviewer <name>] [--superseded] [--pack <dir>] [--notes <text>] [--store <dir>]
     illuminate docs export-human --source <dir> --output <dir> [--config <json>]
     illuminate docs lint-human --source <dir> [--config <json>] [--all-markdown]
     illuminate docs lint-knowledge --source <dir> [--config <json>]
@@ -225,6 +225,8 @@ def _build_parser():
     krj.add_argument("--id", required=True, help="Candidate ID")
     krj.add_argument("--reviewer", default=None, help="Reviewer name")
     krj.add_argument("--superseded", action="store_true", help="Mark the candidate as superseded")
+    krj.add_argument("--pack", default=None,
+                     help="Pack directory required when --superseded (removes the promoted artifact)")
     krj.add_argument("--notes", default=None, help="Rejection notes")
     krj.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
 
@@ -915,6 +917,7 @@ def _cmd_knowledge_reject(args):
         print(f"Error: repository not found: {repo}", file=sys.stderr)
         return 1
     store = Path(args.store) if args.store else None
+    pack_dir = Path(args.pack).resolve() if args.pack else None
 
     try:
         result = knowledge_reject(
@@ -924,6 +927,7 @@ def _cmd_knowledge_reject(args):
             reviewer=args.reviewer,
             supersede=args.superseded,
             notes=args.notes,
+            pack_dir=pack_dir,
         )
     except PromotionError as e:
         print(f"Error: {e}", file=sys.stderr)

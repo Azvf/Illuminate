@@ -26,6 +26,8 @@ from illuminate.promotion import (  # noqa: E402
     knowledge_promote,
     knowledge_reject,
     knowledge_review,
+    promote_policy,
+    promote_reference,
 )
 from illuminate.validate import validate_pack  # noqa: E402
 
@@ -378,8 +380,10 @@ class TestKnowledgePromotion(unittest.TestCase):
         cand = self._reviewed_candidate()
         knowledge_promote(self.repo, cand["id"], self.pack, store=self.store)
         result = knowledge_reject(self.repo, cand["id"], store=self.store,
-                                  supersede=True)
+                                  supersede=True, pack_dir=self.pack)
         self.assertEqual(result["status"], "superseded")
+        # The promoted artifact is removed from the pack on supersede.
+        self.assertFalse((self.pack / "references" / "demo.md").exists())
 
     def test_supersede_raw_raises(self):
         _make_repo(self.repo)
@@ -681,6 +685,8 @@ class TestKnowledgePromotion(unittest.TestCase):
         (pack / "policies" / "index.json").write_text("{not valid", encoding="utf-8")
         with self.assertRaises(PromotionError):
             knowledge_promote(repo, cand["id"], pack, store=self.store)
+        # The staged policy file must be rolled back, leaving no residual.
+        self.assertFalse((pack / "policies" / "rule.md").exists())
 
     # ── 19. P1-B: skill validate failure removes newly created dir ──
 
@@ -829,6 +835,262 @@ class TestKnowledgePromotion(unittest.TestCase):
         as_policy = knowledge_candidate(self.repo, "30-modules/demo.md",
                                         "policy", store=self.store)
         self.assertNotEqual(as_reference["id"], as_policy["id"])
+
+    # ── 24. P4: reference/policy --force in-place upgrade ──
+
+    def test_promote_reference_force_upgrades_existing(self):
+        _make_repo(self.repo, content="# v1\n")
+        c1 = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                 store=self.store)
+        knowledge_review(self.repo, c1["id"], store=self.store)
+        knowledge_promote(self.repo, c1["id"], self.pack, store=self.store)
+        target = self.pack / "references" / "demo.md"
+        self.assertEqual(target.read_text(encoding="utf-8"), "# v1\n")
+
+        # Changed content → different candidate id, same source path & target.
+        _make_repo(self.repo, content="# v2\n")
+        c2 = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                 store=self.store)
+        self.assertNotEqual(c1["id"], c2["id"])
+        knowledge_review(self.repo, c2["id"], store=self.store)
+        # Without --force a same-id entry is still rejected.
+        with self.assertRaises(PromotionError):
+            knowledge_promote(self.repo, c2["id"], self.pack, store=self.store)
+        # --force upgrades in place: single manifest entry, path unchanged,
+        # content now the new reviewed bytes.
+        result = knowledge_promote(self.repo, c2["id"], self.pack, store=self.store,
+                                   force=True)
+        self.assertEqual(result["status"], "promoted")
+        manifest = json.loads((self.pack / "pack.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(manifest["references"]), 1)
+        self.assertEqual(manifest["references"][0]["id"], "demo.pack.demo")
+        self.assertEqual(manifest["references"][0]["path"], "references/demo.md")
+        self.assertEqual(target.read_text(encoding="utf-8"), "# v2\n")
+
+    def test_promote_policy_force_upgrades_existing(self):
+        _make_repo(self.repo, "30-modules/rule.md", "# Rule v1\n")
+        c1 = knowledge_candidate(self.repo, "30-modules/rule.md", "policy",
+                                 store=self.store)
+        knowledge_review(self.repo, c1["id"], store=self.store)
+        knowledge_promote(self.repo, c1["id"], self.pack, store=self.store)
+
+        _make_repo(self.repo, "30-modules/rule.md", "# Rule v2\n")
+        c2 = knowledge_candidate(self.repo, "30-modules/rule.md", "policy",
+                                 store=self.store)
+        self.assertNotEqual(c1["id"], c2["id"])
+        knowledge_review(self.repo, c2["id"], store=self.store)
+        with self.assertRaises(PromotionError):
+            knowledge_promote(self.repo, c2["id"], self.pack, store=self.store)
+        result = knowledge_promote(self.repo, c2["id"], self.pack, store=self.store,
+                                   force=True)
+        self.assertEqual(result["status"], "promoted")
+        index = json.loads(
+            (self.pack / "policies" / "index.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(len(index["policies"]), 1)
+        self.assertEqual(index["policies"][0]["id"], "demo.pack.rule")
+        self.assertEqual(index["policies"][0]["path"], "rule.md")
+        self.assertEqual(
+            (self.pack / "policies" / "rule.md").read_text(encoding="utf-8"),
+            "# Rule v2\n",
+        )
+
+    # ── 25. P5: supersede removes the pack artifact and binds registry ──
+
+    def test_reject_supersede_removes_reference_from_pack(self):
+        cand = self._reviewed_candidate()
+        knowledge_promote(self.repo, cand["id"], self.pack, store=self.store)
+        self.assertTrue((self.pack / "references" / "demo.md").exists())
+        result = knowledge_reject(self.repo, cand["id"], store=self.store,
+                                  supersede=True, pack_dir=self.pack)
+        self.assertEqual(result["status"], "superseded")
+        self.assertFalse((self.pack / "references" / "demo.md").exists())
+        manifest = json.loads((self.pack / "pack.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["references"], [])
+        ok, errors = validate_pack(self.pack)
+        self.assertTrue(ok, errors)
+        candidate = _find(self.store, self.repo, cand["id"])
+        self.assertEqual(candidate["status"], "superseded")
+        self.assertIsNotNone(candidate.get("superseded_at"))
+
+    def test_reject_supersede_removes_policy_skill_evidence(self):
+        # policy
+        repo = Path(tempfile.mkdtemp())
+        pack = _make_pack(Path(tempfile.mkdtemp()))
+        _make_repo(repo, "30-modules/rule.md", "# Rule\n")
+        c = knowledge_candidate(repo, "30-modules/rule.md", "policy",
+                                store=self.store)
+        knowledge_review(repo, c["id"], store=self.store)
+        knowledge_promote(repo, c["id"], pack, store=self.store)
+        self.assertTrue((pack / "policies" / "rule.md").exists())
+        knowledge_reject(repo, c["id"], store=self.store, supersede=True, pack_dir=pack)
+        self.assertFalse((pack / "policies" / "rule.md").exists())
+        index = json.loads((pack / "policies" / "index.json").read_text(encoding="utf-8"))
+        self.assertEqual(index["policies"], [])
+
+        # skill (directory removed: SKILL.md + contract.json + manifest entry)
+        repo2 = Path(tempfile.mkdtemp())
+        pack2 = _make_pack(Path(tempfile.mkdtemp()))
+        skill_content = "---\nname: my-skill\ndescription: Test skill\n---\n# My skill\n"
+        _make_repo(repo2, "30-modules/my-skill.md", skill_content)
+        c2 = knowledge_candidate(repo2, "30-modules/my-skill.md", "skill",
+                                 store=self.store)
+        knowledge_review(repo2, c2["id"], store=self.store)
+        knowledge_promote(repo2, c2["id"], pack2, store=self.store)
+        self.assertTrue((pack2 / "skills" / "my-skill" / "SKILL.md").exists())
+        knowledge_reject(repo2, c2["id"], store=self.store, supersede=True, pack_dir=pack2)
+        self.assertFalse((pack2 / "skills" / "my-skill").exists())
+        manifest2 = json.loads((pack2 / "pack.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest2["skills"], [])
+
+        # evidence (config cleared + file removed)
+        repo3 = Path(tempfile.mkdtemp())
+        pack3 = _make_pack(Path(tempfile.mkdtemp()))
+        _make_repo(repo3, "30-modules/tracer.md", "# Tracer\n")
+        c3 = knowledge_candidate(repo3, "30-modules/tracer.md", "evidence",
+                                 store=self.store)
+        knowledge_review(repo3, c3["id"], store=self.store)
+        knowledge_promote(repo3, c3["id"], pack3, store=self.store)
+        self.assertTrue((pack3 / "evidence" / "tracer.md").exists())
+        knowledge_reject(repo3, c3["id"], store=self.store, supersede=True, pack_dir=pack3)
+        self.assertFalse((pack3 / "evidence" / "tracer.md").exists())
+        manifest3 = json.loads((pack3 / "pack.json").read_text(encoding="utf-8"))
+        self.assertNotIn("config", manifest3.get("evidence", {}))
+        ok3, errors3 = validate_pack(pack3)
+        self.assertTrue(ok3, errors3)
+
+    def test_reject_supersede_validate_failure_restores_pack(self):
+        cand = self._reviewed_candidate()
+        knowledge_promote(self.repo, cand["id"], self.pack, store=self.store)
+        # Inject a broken reference (missing file) so validate_pack must fail
+        # even after our reference is removed.
+        manifest = json.loads((self.pack / "pack.json").read_text(encoding="utf-8"))
+        manifest.setdefault("references", []).append(
+            {"id": "demo.pack.broken", "path": "references/broken.md"}
+        )
+        (self.pack / "pack.json").write_text(json.dumps(manifest), encoding="utf-8")
+        before = (self.pack / "pack.json").read_bytes()
+        ref_file = self.pack / "references" / "demo.md"
+        with self.assertRaises(PromotionError):
+            knowledge_reject(self.repo, cand["id"], store=self.store,
+                             supersede=True, pack_dir=self.pack)
+        # Pack fully restored to the pre-supersede bytes (broken ref included).
+        self.assertEqual((self.pack / "pack.json").read_bytes(), before)
+        self.assertTrue(ref_file.exists())
+        candidate = _find(self.store, self.repo, cand["id"])
+        self.assertEqual(candidate["status"], "promoted")
+
+    def test_reject_supersede_requires_promoted_and_pack(self):
+        cand = self._reviewed_candidate()
+        knowledge_promote(self.repo, cand["id"], self.pack, store=self.store)
+        # Missing pack_dir is rejected for a promoted candidate.
+        with self.assertRaises(PromotionError):
+            knowledge_reject(self.repo, cand["id"], store=self.store, supersede=True)
+        # Non-promoted status is rejected even with pack_dir.
+        repo = Path(tempfile.mkdtemp())
+        _make_repo(repo, "30-modules/other.md")
+        raw = knowledge_candidate(repo, "30-modules/other.md", "reference",
+                                  store=self.store)
+        with self.assertRaises(PromotionError):
+            knowledge_reject(repo, raw["id"], store=self.store, supersede=True,
+                             pack_dir=Path(tempfile.mkdtemp()))
+
+    # ── 26. P6: --force upgrade in place when --target-path changes basename ──
+
+    def test_promote_reference_force_change_basename_via_previous_path(self):
+        # v1 occupies references/demo.md (id demo.pack.demo); force-upgrade the
+        # same artifact to a new basename references/sub/b.md. With the previous
+        # target_path threaded through, the old entry is upgraded in place and
+        # the old file is removed as an orphan (no duplicate).
+        pack = _make_pack(Path(tempfile.mkdtemp()))
+        manifest = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
+        manifest.setdefault("references", []).append(
+            {"id": "demo.pack.demo", "path": "references/demo.md"}
+        )
+        (pack / "pack.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (pack / "references").mkdir(exist_ok=True)
+        (pack / "references" / "demo.md").write_text("# old\n", encoding="utf-8")
+
+        result = promote_reference(
+            pack, "references/sub/b.md", "# new\n", True, "0.1.0",
+            previous_target_path="references/demo.md",
+        )
+        self.assertEqual(result["id"], "demo.pack.b")
+        manifest = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(manifest["references"]), 1)
+        self.assertEqual(
+            manifest["references"][0],
+            {"id": "demo.pack.b", "path": "references/sub/b.md"},
+        )
+        self.assertFalse((pack / "references" / "demo.md").exists())
+        self.assertEqual(
+            (pack / "references" / "sub" / "b.md").read_text(encoding="utf-8"), "# new\n"
+        )
+        ok, errors = validate_pack(pack)
+        self.assertTrue(ok, errors)
+
+    def test_promote_policy_force_change_basename_via_previous_path(self):
+        # v1 occupies policies/rule.md (id demo.pack.rule); force-upgrade the
+        # same artifact to policies/renamed.md, updating the index entry in
+        # place and removing the old file.
+        pack = _make_pack(Path(tempfile.mkdtemp()))
+        index_path = pack / "policies" / "index.json"
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        index["policies"].append({"id": "demo.pack.rule", "path": "rule.md", "priority": 0})
+        index_path.write_text(json.dumps(index), encoding="utf-8")
+        (pack / "policies" / "rule.md").write_text("# old rule\n", encoding="utf-8")
+
+        result = promote_policy(
+            pack, "policies/renamed.md", "# new rule\n", True, "0.1.0",
+            previous_target_path="policies/rule.md",
+        )
+        self.assertEqual(result["id"], "demo.pack.renamed")
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(index["policies"]), 1)
+        self.assertEqual(
+            index["policies"][0],
+            {"id": "demo.pack.renamed", "path": "renamed.md", "priority": 0},
+        )
+        self.assertFalse((pack / "policies" / "rule.md").exists())
+        self.assertEqual(
+            (pack / "policies" / "renamed.md").read_text(encoding="utf-8"), "# new rule\n"
+        )
+        ok, errors = validate_pack(pack)
+        self.assertTrue(ok, errors)
+
+    # ── 27. P7: skill supersede rollback restores nested files ──
+
+    def test_reject_supersede_skill_nested_dir_restored_on_validate_failure(self):
+        repo = Path(tempfile.mkdtemp())
+        pack = _make_pack(Path(tempfile.mkdtemp()))
+        skill_content = "---\nname: nested-skill\ndescription: Test skill\n---\n# Skill\n"
+        _make_repo(repo, "30-modules/nested-skill.md", skill_content)
+        c = knowledge_candidate(repo, "30-modules/nested-skill.md", "skill",
+                                store=self.store)
+        knowledge_review(repo, c["id"], store=self.store)
+        knowledge_promote(repo, c["id"], pack, store=self.store)
+        # Manually extend the skill dir with a nested subdirectory file.
+        nested = pack / "skills" / "nested-skill" / "sub" / "extra.md"
+        nested.parent.mkdir(parents=True, exist_ok=True)
+        nested.write_text("# extra\n", encoding="utf-8")
+        # Inject a broken reference so validate_pack fails during supersede.
+        manifest = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
+        manifest.setdefault("references", []).append(
+            {"id": "demo.pack.broken", "path": "references/broken.md"}
+        )
+        (pack / "pack.json").write_text(json.dumps(manifest), encoding="utf-8")
+        before_pack = (pack / "pack.json").read_bytes()
+
+        with self.assertRaises(PromotionError):
+            knowledge_reject(repo, c["id"], store=self.store, supersede=True,
+                             pack_dir=pack)
+        # The whole skill subtree (including the nested file) is restored.
+        self.assertEqual((pack / "pack.json").read_bytes(), before_pack)
+        self.assertTrue((pack / "skills" / "nested-skill" / "SKILL.md").exists())
+        self.assertTrue(nested.exists())
+        self.assertEqual(nested.read_text(encoding="utf-8"), "# extra\n")
+        candidate = _find(self.store, repo, c["id"])
+        self.assertEqual(candidate["status"], "promoted")
 
 
 if __name__ == "__main__":

@@ -94,7 +94,7 @@ Keep human-readable Markdown as the source truth and store claims, evidence, and
 | `illuminate knowledge candidate --repo <path> --source <path> --target <kind> [--anchor <ref>] [--notes <text>] [--store <dir>]` | Create a promotion candidate from a knowledge source with provenance |
 | `illuminate knowledge review --repo <path> --id <id> [--reviewer <name>] [--notes <text>] [--store <dir>]` | Move a candidate from `raw` to `reviewed` |
 | `illuminate knowledge promote --repo <path> --id <id> --pack <dir> [--target-path <path>] [--content <file>] [--dry-run] [--force] [--store <dir>]` | Promote a reviewed candidate into the Harness Pack (generalized via `--content`) |
-| `illuminate knowledge reject --repo <path> --id <id> [--reviewer <name>] [--superseded] [--notes <text>] [--store <dir>]` | Reject a `raw`/`reviewed` candidate or mark a promoted one `superseded` |
+| `illuminate knowledge reject --repo <path> --id <id> [--reviewer <name>] [--superseded] [--pack <dir>] [--notes <text>] [--store <dir>]` | Reject a `raw`/`reviewed` candidate or mark a promoted one `superseded` (removing its pack artifact via `--pack`) |
 | `illuminate docs lint-knowledge --source <dir> [--config <json>]` | Validate Manifest owners, metadata IDs, and YAML `doc_refs` |
 
 ### Skill Selection
@@ -234,7 +234,7 @@ The four commands:
 - `candidate` captures a source document with provenance (git remote, commit, docs-relative path, anchor) and snapshots its exact bytes to `promotions/<id>/source.md` (`source_sha256`). The candidate id is derived from `commit + repo + path + anchor + target + source_sha256`, so the same source can be promoted to different targets, and changed content (even uncommitted, or in a non-git project) yields a new candidate for a v1 → v2 → supersede cycle.
 - `review` marks a candidate `reviewed` and pins `reviewed_sha256` to the hash of the exact bytes under review. By default those are the source snapshot; with `--content <file>` the bytes under review are a generalized draft, which is snapshotted to `promotions/<id>/draft.md` and bound as the reviewed content (the candidate is marked `generalized`).
 - `promote` writes content into a Harness Pack (`<pack>/policies|skills|references|evidence/`) and registers it in the pack manifest. It only consumes already-reviewed bytes — the draft snapshot for a `generalized` candidate, otherwise the current source document — and is guarded by `reviewed_sha256`: anything that does not hash to the value recorded at review is rejected ("refusing to promote unreviewed bytes"), so a source edit after review fails promotion. This closes the draft-review loop: `raw → review --content draft → promote` promotes exactly the reviewed draft.
-- `reject` marks a `raw`/`reviewed` candidate `rejected`; with `--superseded` it marks a `promoted` candidate `superseded`.
+- `reject` marks a `raw`/`reviewed` candidate `rejected`; with `--superseded` (and `--pack <dir>`) it removes the promoted artifact from the pack — deleting the file (or skill directory) and its manifest/index registration, then re-running `validate_pack`. `superseded` therefore means "Pack artifact removed + registry status": old knowledge is no longer consumed by the pack or Cursor. If validation fails the pack change is rolled back and the registry is left `promoted`.
 
 Manifest registration per target:
 - `reference` — appended to `pack.json.references`.
@@ -242,14 +242,17 @@ Manifest registration per target:
 - `skill` — writes `skills/<name>/SKILL.md` + a minimal `contract.json` and registers in `pack.json.skills`. The source must itself be a valid SKILL.md with `name:`/`description:` frontmatter: `validate_pack` rejects any skill whose `SKILL.md` lacks them, so a promoted skill is guaranteed discoverable by Cursor.
 - `evidence` — sets `pack.json.evidence.config`.
 
-After writing, `promote` runs `validate_pack`; if validation fails the whole change (files + manifest + index) is rolled back. `--target-path` is narrowed to the target's directory (`references/`, `policies/`, `skills/`, `evidence/`) and cannot target governance/index files (`pack.json`, `*.schema.json`, `index.json`) even with `--force`. An existing pack file is only overwritten with `--force`; `--dry-run` writes nothing.
+After writing, `promote` runs `validate_pack`; if validation fails the whole change (files + manifest + index) is rolled back. `--target-path` is narrowed to the target's directory (`references/`, `policies/`, `skills/`, `evidence/`) and cannot target governance/index files (`pack.json`, `*.schema.json`, `index.json`) even with `--force`. An existing pack file is only overwritten with `--force`; `--dry-run` writes nothing. For all four targets `--force` also upgrades an already-registered entry in place (reference/policy update their manifest/index path; skill/evidence were already supported): the old file is removed only after `validate_pack` succeeds, so a failed `--force` leaves the pack unchanged.
 
 Promotion does not stage or commit. `promote` only writes into the Pack working tree; commits and PRs are left to Git and humans.
 
 ```bash
 illuminate knowledge candidate --repo /path/to/project --source 30-modules/hot-update.md --target reference
+# Review binds exactly once: either the source, or a generalized draft via --content.
 illuminate knowledge review --repo /path/to/project --id <candidate-id> --reviewer alice
-illuminate knowledge review --repo /path/to/project --id <candidate-id> --content generalized.md
+# illuminate knowledge review --repo /path/to/project --id <candidate-id> --reviewer alice --content generalized.md
 illuminate knowledge promote --repo /path/to/project --id <candidate-id> --pack packs/core
 illuminate knowledge reject --repo /path/to/project --id <candidate-id>
+# Supersede a promoted candidate: removes its artifact from the pack.
+# illuminate knowledge reject --repo /path/to/project --id <candidate-id> --superseded --pack packs/core
 ```

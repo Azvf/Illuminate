@@ -22,11 +22,18 @@ bytes.
 Store remains the backup tool; this module only adds the promotion registry.
 Source snapshots live in ``<store>/projects/<project-id>/promotions/<id>/`` as
 ``source.md`` (candidate creation) and ``draft.md`` (generalized review).
+
+Superseding a promoted candidate removes its artifact from the pack (file +
+manifest/index registration) and re-validates; the record is marked
+``superseded`` only after the pack change succeeds. ``superseded`` therefore
+means "Pack artifact removed + registry status", so old knowledge is no longer
+consumed by the pack or Cursor.
 """
 
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -333,7 +340,12 @@ def _stage_file(pack_dir: Path, written: str, content: str, force: bool):
 
 
 def _restore(created: List[Path], originals: Dict[Path, Optional[bytes]]) -> None:
-    """Undo a pack change: remove created files, restore overwritten ones."""
+    """Undo a pack change: remove created files, restore overwritten ones.
+
+    Parent directories are recreated before writing so a removed subtree (e.g.
+    a superseded skill directory with nested files) can be restored byte for
+    byte even after its directories were deleted.
+    """
     for path in created:
         if path.exists():
             path.unlink()
@@ -342,6 +354,7 @@ def _restore(created: List[Path], originals: Dict[Path, Optional[bytes]]) -> Non
             if path.exists():
                 path.unlink()
         else:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(original)
 
 
@@ -563,10 +576,16 @@ def knowledge_promote(
             "generalized": generalized,
         }
 
+    # The path this candidate was previously promoted to (None on first
+    # promote). Lets --force upgrade in place even when --target-path changed
+    # the filename, by locating the previous manifest/index entry by path.
+    previous_target_path = record.get("target_path")
     if target == "reference":
-        promote_reference(pack_dir, written, content, force, pack_version)
+        promote_reference(pack_dir, written, content, force, pack_version,
+                          previous_target_path)
     elif target == "policy":
-        promote_policy(pack_dir, written, content, force, pack_version)
+        promote_policy(pack_dir, written, content, force, pack_version,
+                       previous_target_path)
     elif target == "skill":
         promote_skill(pack_dir, skill_name, content, force, pack_version)
     elif target == "evidence":
@@ -593,12 +612,19 @@ def knowledge_promote(
 # Per-target pack writers (four direct implementations, no dispatcher/registry)
 # ---------------------------------------------------------------------------
 
-def promote_reference(pack_dir, written, content, force, pack_version) -> dict:
+def promote_reference(pack_dir, written, content, force, pack_version,
+                      previous_target_path=None) -> dict:
     """Write a reference file and register it in ``pack.json.references``.
 
     The entry id is derived from the pack id + the filename stem and must be
-    unique in the manifest; a duplicate id is rejected (references are
-    id-unique). Runs validate_pack and rolls back on failure.
+    unique in the manifest. A duplicate id is rejected unless ``--force``, in
+    which case the existing entry's ``path`` is updated to the new ``written``
+    path (an in-place upgrade). If ``--target-path`` changed the basename, the
+    new-id lookup misses, so under force we fall back to locating the entry
+    this candidate previously promoted (``previous_target_path``) and upgrade
+    its path + id in place; otherwise we append. If the old path differs from
+    the new one, the old file is removed only after validate_pack succeeds.
+    Runs validate_pack and rolls back on failure.
     """
     pack_dir = Path(pack_dir)
     created, originals, _ = _stage_file(pack_dir, written, content, force)
@@ -607,21 +633,45 @@ def promote_reference(pack_dir, written, content, force, pack_version) -> dict:
     manifest = _read_json(pack_path)
     ref_id = _derive_id(manifest, Path(written).stem)
     refs = manifest.setdefault("references", [])
-    if any(r.get("id") == ref_id for r in refs):
-        _restore(created, originals)
-        raise PromotionError(f"reference already registered in pack manifest: {ref_id}")
-    refs.append({"id": ref_id, "path": written})
+    existing = next((r for r in refs if r.get("id") == ref_id), None)
+    if existing is None and force and previous_target_path:
+        existing = next((r for r in refs if r.get("path") == previous_target_path), None)
+    old_path = existing.get("path") if existing else None
+    if existing:
+        if not force:
+            _restore(created, originals)
+            raise PromotionError(f"reference already registered in pack manifest: {ref_id}")
+        existing["path"] = written
+        existing["id"] = ref_id
+    else:
+        refs.append({"id": ref_id, "path": written})
     _write_json(pack_path, manifest)
     _validate_or_rollback(pack_dir, created, originals, written)
+    # With --force the previous reference was replaced; if it is no longer
+    # referenced by the manifest, remove the orphan file so a pack upgrade
+    # does not leave dead references behind.
+    if old_path and old_path != written:
+        orphan = (pack_dir / old_path).resolve()
+        if orphan.is_file() and orphan.is_relative_to(pack_dir.resolve()):
+            orphan.unlink()
     return {"written": written, "id": ref_id}
 
 
-def promote_policy(pack_dir, written, content, force, pack_version) -> dict:
+def promote_policy(pack_dir, written, content, force, pack_version,
+                   previous_target_path=None) -> dict:
     """Write a policy file and register it in ``policies/index.json``.
 
     The policy is registered with priority 0 (lowest) so a new policy never
     shadows existing mandatory ones; id is derived from the pack id + filename
-    stem and must be unique in the index. Runs validate_pack and rolls back.
+    stem. A duplicate id is rejected unless ``--force``, in which case the
+    existing index entry's ``path`` is updated to the new ``written`` path (an
+    in-place upgrade). If ``--target-path`` changed the basename, the new-id
+    lookup misses, so under force we fall back to locating the entry this
+    candidate previously promoted (``previous_target_path``) and upgrade its
+    path + id in place; otherwise we append. If the old path differs from the
+    new one, the old file is removed only after validate_pack succeeds. If the
+    policy index is malformed, the already-staged policy file and originals are
+    rolled back before re-raising. Runs validate_pack and rolls back.
     """
     pack_dir = Path(pack_dir)
     created, originals, _ = _stage_file(pack_dir, written, content, force)
@@ -633,20 +683,44 @@ def promote_policy(pack_dir, written, content, force, pack_version) -> dict:
     index_path = pack_dir / index_rel
     originals[index_path] = _read_bytes_or_none(index_path)
     if index_path.exists():
-        index = _read_json_governance(index_path)
+        try:
+            index = _read_json_governance(index_path)
+        except PromotionError:
+            _restore(created, originals)
+            raise
     else:
         index = {"schema_version": 1, "policies": []}
     policy_id = _derive_id(manifest, Path(written).stem)
-    if any(p.get("id") == policy_id for p in index.get("policies", [])):
-        _restore(created, originals)
-        raise PromotionError(f"policy already registered in index: {policy_id}")
-    # Policy paths in the index are relative to the policies/ directory.
-    policy_rel = Path(written).relative_to("policies").as_posix()
-    index.setdefault("policies", []).append(
-        {"id": policy_id, "path": policy_rel, "priority": 0}
-    )
+    policies = index.setdefault("policies", [])
+    existing = next((p for p in policies if p.get("id") == policy_id), None)
+    if existing is None and force and previous_target_path:
+        old_rel = Path(previous_target_path).relative_to("policies").as_posix()
+        existing = next((p for p in policies if p.get("path") == old_rel), None)
+    old_path = existing.get("path") if existing else None
+    if existing:
+        if not force:
+            _restore(created, originals)
+            raise PromotionError(f"policy already registered in index: {policy_id}")
+        existing["path"] = Path(written).relative_to("policies").as_posix()
+        existing["id"] = policy_id
+    else:
+        # Policy paths in the index are relative to the policies/ directory.
+        policies.append(
+            {
+                "id": policy_id,
+                "path": Path(written).relative_to("policies").as_posix(),
+                "priority": 0,
+            }
+        )
     _write_json(index_path, index)
     _validate_or_rollback(pack_dir, created, originals, written)
+    # With --force the previous policy was replaced; if it is no longer
+    # referenced by the index, remove the orphan file so a pack upgrade does
+    # not leave dead policies behind.
+    if old_path and old_path != Path(written).relative_to("policies").as_posix():
+        orphan = (pack_dir / "policies" / old_path).resolve()
+        if orphan.is_file() and orphan.is_relative_to(pack_dir.resolve()):
+            orphan.unlink()
     return {"written": written, "id": policy_id}
 
 
@@ -739,6 +813,107 @@ def promote_evidence(pack_dir, written, content, force, pack_version) -> dict:
     return {"written": written}
 
 
+def _unlink_if_exists(path: Path) -> None:
+    """Best-effort delete a file; no-op if it is absent."""
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError:
+        pass
+
+
+def _unpromote(pack_dir: Path, record: dict) -> None:
+    """Remove a promoted artifact from the pack (reverse of promote).
+
+    Deletes the promoted file (or skill directory) and removes its manifest /
+    index registration, recording originals first. Runs validate_pack and, on
+    failure, restores every recorded original and re-raises, so a failed
+    supersede leaves the pack untouched and the registry unpromoted.
+    """
+    pack_dir = Path(pack_dir)
+    target = record.get("target")
+    target_path = record.get("target_path")
+    if target not in _TARGETS or not target_path:
+        raise PromotionError(
+            f"cannot locate pack artifact for supersede: record has no "
+            f"target/target_path (id={record.get('id')})"
+        )
+
+    originals: Dict[Path, Optional[bytes]] = {}
+    skill_dir: Optional[Path] = None
+
+    pack_path = pack_dir / "pack.json"
+    originals[pack_path] = _read_bytes_or_none(pack_path)
+    manifest = _read_json(pack_path)
+
+    if target == "reference":
+        ref_id = _derive_id(manifest, Path(target_path).stem)
+        refs = manifest.setdefault("references", [])
+        entry = next((r for r in refs if r.get("id") == ref_id), None)
+        if entry is None:
+            raise PromotionError(f"reference not registered in pack manifest: {ref_id}")
+        file_path = pack_dir / entry["path"]
+        originals[file_path] = _read_bytes_or_none(file_path)
+        refs.remove(entry)
+        _write_json(pack_path, manifest)
+        _unlink_if_exists(file_path)
+
+    elif target == "policy":
+        policy_id = _derive_id(manifest, Path(target_path).stem)
+        policies_meta = manifest.setdefault("policies", {})
+        index_rel = policies_meta.setdefault("index", "policies/index.json")
+        index_path = pack_dir / index_rel
+        originals[index_path] = _read_bytes_or_none(index_path)
+        index = _read_json_governance(index_path)
+        policies = index.setdefault("policies", [])
+        entry = next((p for p in policies if p.get("id") == policy_id), None)
+        if entry is None:
+            raise PromotionError(f"policy not registered in index: {policy_id}")
+        file_path = pack_dir / "policies" / entry["path"]
+        originals[file_path] = _read_bytes_or_none(file_path)
+        policies.remove(entry)
+        _write_json(index_path, index)
+        _unlink_if_exists(file_path)
+
+    elif target == "skill":
+        skill_name = Path(target_path).parent.name
+        skill_id = _derive_id(manifest, skill_name)
+        skills = manifest.setdefault("skills", [])
+        entry = next((s for s in skills if s.get("id") == skill_id), None)
+        if entry is None:
+            raise PromotionError(f"skill not registered in pack manifest: {skill_id}")
+        skill_dir = pack_dir / entry["dir"]
+        for f in skill_dir.rglob("*"):
+            if f.is_file():
+                originals[f] = _read_bytes_or_none(f)
+        skills.remove(entry)
+        _write_json(pack_path, manifest)
+        shutil.rmtree(skill_dir, ignore_errors=True)
+
+    elif target == "evidence":
+        evidence = manifest.setdefault("evidence", {})
+        config = evidence.get("config")
+        if not config or config != target_path:
+            raise PromotionError(
+                f"evidence config not set to {target_path}: {config or '<none>'}"
+            )
+        file_path = pack_dir / config
+        originals[file_path] = _read_bytes_or_none(file_path)
+        del evidence["config"]
+        _write_json(pack_path, manifest)
+        _unlink_if_exists(file_path)
+
+    ok, errors = validate_pack(pack_dir)
+    if not ok:
+        # _restore recreates parent dirs, so a removed skill subtree is restored
+        # byte-for-byte even if it contained nested directories.
+        _restore([], originals)
+        raise PromotionError(
+            f"pack validation failed after supersede; changes rolled back: "
+            f"{'; '.join(errors)}"
+        )
+
+
 def knowledge_reject(
     repo_root,
     candidate_id,
@@ -746,8 +921,16 @@ def knowledge_reject(
     reviewer=None,
     supersede=False,
     notes=None,
+    pack_dir=None,
 ) -> dict:
-    """Reject a candidate, or supersede a promoted one."""
+    """Reject a candidate, or supersede a promoted one.
+
+    With ``supersede=True`` the promoted artifact is removed from ``pack_dir``
+    (file + manifest/index registration) and the pack is re-validated; on
+    success the record is marked ``superseded``. ``pack_dir`` is required for
+    supersede. ``superseded`` therefore means "Pack artifact removed + registry
+    status" — a superseded item is no longer consumed by the pack or Cursor.
+    """
     repo_root = Path(repo_root).resolve()
     _, project_dir, candidates = _load(store, repo_root)
     record = _find(candidates, candidate_id)
@@ -758,7 +941,14 @@ def knowledge_reject(
             raise PromotionError(
                 f"cannot supersede candidate in status '{status}' (only 'promoted')"
             )
+        if pack_dir is None:
+            raise PromotionError(
+                "superseding a promoted candidate requires --pack "
+                "(the promoted artifact is removed from the pack)"
+            )
+        _unpromote(pack_dir, record)
         record["status"] = "superseded"
+        record["superseded_at"] = _now()
     else:
         if status not in {"raw", "reviewed"}:
             raise PromotionError(
