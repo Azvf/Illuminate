@@ -7,14 +7,45 @@ Supports exactly the keywords used by Illuminate's own schemas
   - additionalProperties (false only), enum, const, pattern
   - $ref to internal "#/definitions/..." paths
 
-Unknown keywords are ignored, matching draft-07 behaviour of allowing
-annotations. This is intentionally a bounded subset: if a schema needs a
-keyword not listed here, extend this module rather than importing a
-third-party dependency.
+Only the explicit keyword set in ``SUPPORTED_KEYWORDS`` is accepted. Any
+other keyword fails closed: ``validate`` raises ``SchemaError`` listing the
+unsupported keyword and its location in the schema. Unknown keywords are no
+longer silently ignored. If a schema needs a keyword not listed here, extend
+this module rather than importing a third-party dependency.
 """
 
 import re
 from typing import Any, Dict, List, Optional
+
+# Keywords the subset implements for validation semantics.
+_VALIDATION_KEYWORDS = {
+    "type",
+    "required",
+    "properties",
+    "items",
+    "additionalProperties",
+    "enum",
+    "const",
+    "pattern",
+    "$ref",
+}
+
+# Standard annotation / container keywords that appear in Illuminate's own
+# bundled schemas and are safe to carry without affecting validation.
+_ANNOTATION_KEYWORDS = {
+    "$schema",
+    "title",
+    "description",
+    "default",
+    "definitions",
+    "$defs",
+}
+
+SUPPORTED_KEYWORDS = frozenset(_VALIDATION_KEYWORDS | _ANNOTATION_KEYWORDS)
+
+
+class SchemaError(ValueError):
+    """Raised when a schema uses a keyword outside the supported subset."""
 
 
 def _type_name(instance: Any) -> str:
@@ -116,11 +147,77 @@ def _validate(instance: Any, schema: Dict, root: Dict, path: str) -> List[str]:
     return errors
 
 
+def validate_schema_keywords(schema: Dict, path: str = "$") -> List[str]:
+    """Return a list of unsupported keywords found in a schema.
+
+    Recursively walks ``properties``/``items``/``definitions``/``$defs`` and
+    follows internal ``$ref`` targets. An empty list means the schema uses
+    only ``SUPPORTED_KEYWORDS``.
+    """
+    found: List[str] = []
+    visited: set = set()
+
+    def walk(node: Any, node_path: str) -> None:
+        if not isinstance(node, dict):
+            return
+        marker = id(node)
+        if marker in visited:
+            return
+        visited.add(marker)
+        for key, value in node.items():
+            if key not in SUPPORTED_KEYWORDS:
+                found.append(f"{node_path}.{key}")
+        # additionalProperties is supported only as strict `False`. The schema
+        # (dict) and `True` forms are accepted by SUPPORTED_KEYWORDS but _validate
+        # only honours `is False`, so any other value would be silently ignored —
+        # reject it to keep fail-closed semantics.
+        if "additionalProperties" in node and node["additionalProperties"] is not False:
+            found.append(
+                f"{node_path}.additionalProperties must be false "
+                "(schema form unsupported)"
+            )
+        if "$ref" in node:
+            resolved = _resolve_ref(node, node["$ref"], schema)
+            if resolved is not None:
+                walk(resolved, node_path + ".$ref")
+        # name -> schema maps: keys are arbitrary names, values are schemas.
+        # patternProperties is intentionally NOT treated as a schema container:
+        # it is outside SUPPORTED_KEYWORDS, so the keyword loop above reports it
+        # as unsupported, and its value must not be silently recursed.
+        for container in ("properties", "$defs", "definitions"):
+            child = node.get(container)
+            if isinstance(child, dict):
+                for sub_key, sub_schema in child.items():
+                    walk(sub_schema, f"{node_path}.{container}.{sub_key}")
+        # items supports only a single dict schema. The tuple form (a list of
+        # schemas) is rejected: _validate only handles the dict form, so a list
+        # would be silently skipped. Do not recurse into the list's elements.
+        items = node.get("items")
+        if isinstance(items, dict):
+            walk(items, node_path + ".items")
+        elif isinstance(items, list):
+            found.append(f"{node_path}.items tuple form unsupported")
+
+    walk(schema, path)
+    return found
+
+
 def validate(instance: Any, schema: Dict) -> List[str]:
     """Validate an instance against a JSON Schema.
 
     Returns a list of human-readable error strings; empty means valid.
+
+    Raises :class:`SchemaError` if the schema uses a keyword outside the
+    supported subset, so unsupported structures fail closed instead of being
+    silently ignored.
     """
     if not isinstance(schema, dict):
         return ["schema must be an object"]
+    unsupported = validate_schema_keywords(schema)
+    if unsupported:
+        raise SchemaError(
+            "schema uses unsupported keywords: "
+            + ", ".join(unsupported)
+            + f" (supported: {sorted(SUPPORTED_KEYWORDS)})"
+        )
     return _validate(instance, schema, schema, "$")

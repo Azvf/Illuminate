@@ -6,6 +6,7 @@ from typing import Dict, Iterable, List, Optional
 from urllib.parse import unquote, urlsplit
 
 from .document_layout import (
+    detect_unsupported_yaml,
     discover_manifests,
     is_root_relative_path,
     manifest_document_paths,
@@ -106,8 +107,12 @@ def _parse_ref_item(value: str) -> dict:
     return {"ref": _strip_yaml_value(value), "role": "primary"}
 
 
-def _metadata_entries(path: Path):
-    """Read scalar and ``{ref, role}`` doc_refs without a YAML dependency."""
+def _metadata_entries(path: Path, errors: Optional[List[str]] = None):
+    """Read scalar and ``{ref, role}`` doc_refs without a YAML dependency.
+
+    Unsupported YAML syntax is reported into ``errors`` (fail-closed) rather
+    than silently dropped by the hand-rolled parser.
+    """
     current_id: Optional[str] = None
     in_doc_refs = False
     doc_refs_indent = -1
@@ -123,6 +128,10 @@ def _metadata_entries(path: Path):
         line = raw_line.rstrip()
         if not line.strip() or line.lstrip().startswith("#"):
             continue
+        if errors is not None:
+            unsupported = detect_unsupported_yaml(line)
+            if unsupported:
+                errors.append(f"{path.name}: line {raw_line!r}: {unsupported}")
         inline = _ID_INLINE_RE.match(line)
         if inline:
             finish_ref()
@@ -317,8 +326,8 @@ def lint_knowledge(docs_root: Path, config_path: Optional[Path] = None) -> List[
     ]
     for metadata_path in metadata_files:
         manifest_path = _manifest_for_metadata(metadata_path, manifest_documents)
-        for item_id, refs in _metadata_entries(metadata_path):
-            relative_metadata = metadata_path.relative_to(docs_root)
+        relative_metadata = metadata_path.relative_to(docs_root)
+        for item_id, refs in _metadata_entries(metadata_path, errors=errors):
             if item_id in seen_ids:
                 errors.append(
                     f"{relative_metadata}: duplicate id {item_id} "

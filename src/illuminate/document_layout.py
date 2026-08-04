@@ -18,6 +18,53 @@ _MANIFEST_FILES = {
 }
 _SCALAR_RE = re.compile(r"^(?P<indent>\s*)(?P<key>id|document)\s*:\s*(?P<value>.*?)\s*(?:#.*)?$")
 _LIST_ITEM_RE = re.compile(r"^(?P<indent>\s*)-\s+(?P<value>.*?)\s*$")
+# Unsupported YAML syntax markers (fail-closed, not silently ignored).
+# A value token that is a YAML anchor (&name) or alias (*name).
+#   - Anchors may start a line ("&name value", an anchored scalar) OR follow
+#     whitespace inside a value, so "(?:^|\s)&" covers both.
+#   - Aliases keep a preceding-whitespace requirement only. A line starting
+#     with "*name" is deliberately NOT matched because that is indistinguishable
+#     from markdown emphasis ("*italic*"), which would be a false positive on
+#     ordinary document text that reaches this parser. Anchored scalars are the
+#     realistic line-start case, so & still gets the "line start" widening.
+# The whitespace requirement on aliases also avoids matching URL query params
+# like "a=1&b=2".
+_ANCHOR_ALIAS_RE = re.compile(
+    r"(?:^|\s)&[A-Za-z_][A-Za-z0-9_-]*|\s\*[A-Za-z_][A-Za-z0-9_-]*"
+)
+# Block scalar indicators at end of a value line: "|", "|2", "|+", ">-", ">".
+_BLOCK_SCALAR_RE = re.compile(r"[|>](?:[1-9][0-9]*|[+-])?\s*$")
+# Keys this hand-rolled parser understands; anything else that carries a
+# "key: value" on an indented line is treated as an unsupported nested mapping.
+_KNOWN_KEYS = ("id", "document", "documents", "doc_refs", "ref", "role")
+
+
+def detect_unsupported_yaml(line: str) -> Optional[str]:
+    """Return an error string if ``line`` uses YAML syntax this parser ignores.
+
+    Returns ``None`` when the line is plain. Detection is intentionally
+    conservative to avoid false positives on existing legal usage: URLs,
+    markdown links, inline ``[a, b]`` lists, flow ``{...}`` mappings, and the
+    known ``id``/``document``/``documents``/``doc_refs``/``ref``/``role`` keys
+    are all allowed.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    value = _strip_yaml_comment(stripped)
+
+    if _ANCHOR_ALIAS_RE.search(value):
+        return "unsupported YAML anchor/alias"
+    if _BLOCK_SCALAR_RE.search(value):
+        return "unsupported YAML block scalar"
+    # Nested mapping: only on indented continuation lines (a value's scalar
+    # being followed by a nested "key: value"). Top-level keys and list items
+    # are the legal usage this parser handles.
+    if line[:1].isspace() and not value.startswith("- ") and not value.startswith("{"):
+        match = re.match(r"^(?P<key>[^:]+)\s*:\s*", value)
+        if match and match.group("key").strip() not in _KNOWN_KEYS:
+            return "unsupported YAML nested mapping"
+    return None
 
 
 def _strip_yaml_comment(value: str) -> str:
@@ -153,12 +200,21 @@ def _unquote(value: str) -> str:
     return value
 
 
-def manifest_fields(path: Path) -> Dict[str, object]:
-    """Read the manifest identity, primary document, and auxiliary documents."""
+def manifest_fields(path: Path) -> "tuple[Dict[str, object], List[str]]":
+    """Read the manifest identity, primary document, and auxiliary documents.
+
+    Returns ``(fields, errors)`` where ``errors`` lists unsupported YAML
+    syntax that the hand-rolled parser cannot safely interpret (fail-closed
+    instead of silently dropping it).
+    """
     fields: Dict[str, object] = {"id": None, "document": None, "documents": []}
+    errors: List[str] = []
     in_documents = False
     documents_indent = -1
     for raw_line in Path(path).read_text(encoding="utf-8").splitlines():
+        unsupported = detect_unsupported_yaml(raw_line)
+        if unsupported:
+            errors.append(f"line {raw_line!r}: {unsupported}")
         scalar = _SCALAR_RE.match(raw_line)
         if scalar:
             key = scalar.group("key")
@@ -193,17 +249,17 @@ def manifest_fields(path: Path) -> Dict[str, object]:
                 continue
             if stripped and len(raw_line) - len(raw_line.lstrip()) <= documents_indent:
                 in_documents = False
-    return fields
+    return fields, errors
 
 
 def manifest_document_paths(
     docs_root: Path, record: dict, layout: dict
 ) -> Tuple[List[str], List[str]]:
     """Return ``(owned_documents, errors)`` for one owner manifest."""
-    fields = manifest_fields(record["path"])
+    fields, parse_errors = manifest_fields(record["path"])
     primary = fields["document"]
     auxiliary = fields["documents"]
-    errors: List[str] = []
+    errors: List[str] = parse_errors
     manifest_id = fields["id"]
     if not manifest_id:
         errors.append("missing id")
@@ -254,7 +310,7 @@ def manifest_document_paths(
 
 def manifest_document_path(docs_root: Path, record: dict, layout: dict) -> tuple:
     """Return ``(primary_document, error)`` for compatibility."""
-    fields = manifest_fields(record["path"])
+    fields, _ = manifest_fields(record["path"])
     documents, errors = manifest_document_paths(docs_root, record, layout)
     primary = fields["document"]
     if errors:
