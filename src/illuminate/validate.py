@@ -21,6 +21,18 @@ class ValidationError(Exception):
     pass
 
 
+def _normalize_ref_path(p: str) -> str:
+    """Platform-independent reference path normalization.
+
+    Backslashes are converted to forward slashes explicitly, because
+    Path.as_posix() only converts the OS separator and would leave a literal
+    backslash untouched on POSIX. Then Path() collapses '.' components
+    (leading "./"). Case is intentionally NOT normalized: on case-sensitive
+    filesystems `R.md` and `r.md` are distinct files.
+    """
+    return Path(p.replace("\\", "/")).as_posix()
+
+
 def _load_schema(name: str):
     """Load a JSON Schema bundled with the package, or None if unavailable.
 
@@ -76,6 +88,9 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
     except Exception as e:
         return False, [str(e)]
 
+    if not isinstance(manifest, dict):
+        return False, ["pack.json must contain a JSON object"]
+
     pack_id = manifest.get("id", "<unknown>")
 
     # 1b. Load contracts and validate manifest + contracts against JSON Schemas
@@ -109,7 +124,14 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
     # 3. Validate skill entries
     skill_ids = []
     skill_dirs = []
-    for entry in manifest.get("skills", []):
+    skills = manifest.get("skills", [])
+    if not isinstance(skills, list):
+        errors.append(f"[{pack_id}] skills must be a list: {skills!r}")
+        skills = []
+    for entry in skills:
+        if not isinstance(entry, dict):
+            errors.append(f"[{pack_id}] skill entry must be an object: {entry!r}")
+            continue
         sid = entry.get("id", "")
         sdir = entry.get("dir", "")
         if not sid:
@@ -117,6 +139,9 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
             continue
         if not isinstance(sid, str):
             errors.append(f"[{pack_id}] skill entry id must be a string: {entry!r}")
+            continue
+        if not isinstance(sdir, str):
+            errors.append(f"[{pack_id}] skill entry dir must be a string: {entry!r}")
             continue
         skill_ids.append(sid)
         if sdir:
@@ -216,12 +241,24 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
     # 5. Validate references exist
     ref_ids = []
     ref_paths = []
-    for ref_entry in manifest.get("references", []):
-        ref_ids.append(ref_entry.get("id", ""))
-        ref_paths.append(ref_entry.get("path", ""))
-        ref_path = pack_dir / ref_entry["path"]
+    refs = manifest.get("references", [])
+    if not isinstance(refs, list):
+        errors.append(f"[{pack_id}] references must be a list: {refs!r}")
+        refs = []
+    for ref_entry in refs:
+        if not isinstance(ref_entry, dict):
+            errors.append(f"[{pack_id}] reference entry must be an object: {ref_entry!r}")
+            continue
+        rid = ref_entry.get("id", "")
+        rpath = ref_entry.get("path", "")
+        ref_ids.append(rid)
+        if not isinstance(rpath, str) or not rpath:
+            errors.append(f"[{pack_id}] reference entry missing or invalid path: {ref_entry!r}")
+            continue
+        ref_paths.append(rpath)
+        ref_path = pack_dir / rpath
         if not ref_path.exists():
-            errors.append(f"[{pack_id}] reference not found: {ref_entry['path']}")
+            errors.append(f"[{pack_id}] reference not found: {rpath}")
 
     # 5b. Enforce reference id and path uniqueness.
     for rid in set(ref_ids):
@@ -231,9 +268,9 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
     # slashes, leading "./" removed) so `references/./r.md` and
     # `references/r.md` are detected as duplicates. Case is NOT normalized:
     # on case-sensitive filesystems `R.md` and `r.md` are distinct files.
-    normalized_paths = [Path(p).as_posix() for p in ref_paths]
+    normalized_paths = [_normalize_ref_path(p) for p in ref_paths]
     for rpath in set(ref_paths):
-        if normalized_paths.count(Path(rpath).as_posix()) > 1:
+        if normalized_paths.count(_normalize_ref_path(rpath)) > 1:
             errors.append(f"[{pack_id}] duplicate reference path: {rpath}")
 
     # 6. Validate policy index
@@ -289,10 +326,16 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
                     )
 
     # 9. Check all skill dirs have contract.json
-    for entry in manifest.get("skills", []):
-        skill_dir = pack_dir / entry["dir"]
+    for entry in skills:
+        if not isinstance(entry, dict):
+            continue
+        sid = entry.get("id")
+        sdir = entry.get("dir")
+        if not isinstance(sid, str) or not isinstance(sdir, str):
+            continue
+        skill_dir = pack_dir / sdir
         contract_path = skill_dir / "contract.json"
         if not contract_path.exists():
-            errors.append(f"[{pack_id}] contract.json not found for skill '{entry['id']}'")
+            errors.append(f"[{pack_id}] contract.json not found for skill '{sid}'")
 
     return (len(errors) == 0), errors

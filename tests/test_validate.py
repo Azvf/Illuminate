@@ -408,5 +408,109 @@ class TestPackSemanticUniqueness(unittest.TestCase):
         self.assertTrue(ok, errors)
 
 
+class TestMalformedInputNoCrash(unittest.TestCase):
+    """validate_pack must convert malformed input into errors, never raise."""
+
+    def _write_minimal_pack(self, manifest) -> Path:
+        """Write a pack whose manifest is given verbatim, no skill dirs.
+
+        Malformed entries (non-string dir, non-dict references) cannot be
+        materialized as real directories, so no skill/reference files are
+        created; we only need pack.json plus a valid empty policy index.
+        """
+        import tempfile
+        root = Path(tempfile.mkdtemp())
+        pack_dir = root / "pack"
+        pol = pack_dir / "policies"
+        pol.mkdir(parents=True)
+        (pol / "index.json").write_text(
+            json.dumps({"schema_version": 1, "policies": []}), encoding="utf-8")
+        (pack_dir / "pack.json").write_text(json.dumps(manifest), encoding="utf-8")
+        return pack_dir
+
+    def test_numeric_skill_dir_reports_clean_error(self):
+        """A numeric dir must fail cleanly, not crash on sdir.split('/')."""
+        pack_dir = self._write_minimal_pack({
+            "schema_version": 1,
+            "id": "demo.pack",
+            "version": "0.1.0",
+            "name": "demo-pack",
+            "skills": [{"id": "demo.skill.a", "dir": 5}],
+            "references": [],
+            "evidence": {},
+            "policies": {"index": "policies/index.json"},
+        })
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("dir must be a string" in e for e in errors), errors)
+
+    def test_list_skill_dir_reports_clean_error(self):
+        """A list dir must fail cleanly, not crash on sdir.split('/')."""
+        pack_dir = self._write_minimal_pack({
+            "schema_version": 1,
+            "id": "demo.pack",
+            "version": "0.1.0",
+            "name": "demo-pack",
+            "skills": [{"id": "demo.skill.a", "dir": ["skills", "demo"]}],
+            "references": [],
+            "evidence": {},
+            "policies": {"index": "policies/index.json"},
+        })
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("dir must be a string" in e for e in errors), errors)
+
+    def test_reference_missing_path_reports_clean_error(self):
+        """A reference entry without 'path' must fail cleanly, not KeyError."""
+        pack_dir = self._write_minimal_pack({
+            "schema_version": 1,
+            "id": "demo.pack",
+            "version": "0.1.0",
+            "name": "demo-pack",
+            "skills": [],
+            "references": [{"id": "demo.ref"}],
+            "evidence": {},
+            "policies": {"index": "policies/index.json"},
+        })
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("missing or invalid path" in e for e in errors), errors)
+
+    def test_non_dict_reference_entry_reports_clean_error(self):
+        """A string/number in references must fail cleanly, not AttributeError."""
+        pack_dir = self._write_minimal_pack({
+            "schema_version": 1,
+            "id": "demo.pack",
+            "version": "0.1.0",
+            "name": "demo-pack",
+            "skills": [],
+            "references": ["not-a-dict", 42],
+            "evidence": {},
+            "policies": {"index": "policies/index.json"},
+        })
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("reference entry must be an object" in e for e in errors), errors)
+
+    def test_backslash_reference_path_detected_as_duplicate(self):
+        """references\\a.md and references/a.md are the same path on any OS."""
+        pack_dir = self._write_minimal_pack({
+            "schema_version": 1,
+            "id": "demo.pack",
+            "version": "0.1.0",
+            "name": "demo-pack",
+            "skills": [],
+            "references": [
+                {"id": "demo.ref.a", "path": "references\\a.md"},
+                {"id": "demo.ref.b", "path": "references/a.md"},
+            ],
+            "evidence": {},
+            "policies": {"index": "policies/index.json"},
+        })
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("duplicate reference path" in e for e in errors), errors)
+
+
 if __name__ == "__main__":
     unittest.main()
