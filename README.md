@@ -199,7 +199,7 @@ illuminate sync doctor --repo /path/to/project --harness cursor
 illuminate sync clean --repo /path/to/project --harness cursor
 ```
 
-`sync doctor` is read-only Cursor diagnostics: exit code 0 means healthy, 1 means issues were found (cursor harness only). Does NOT modify project-owned `.cursor` content, and does not generate `.cursor/cli.json` or `.agents/skills`. Skills are copied verbatim — SKILL.md bodies are not rewritten for Cursor. See `sync_cursor.py` for details.
+The rules `.mdc` carries `alwaysApply: true` so the governance Policy is always loaded into Cursor context (Cursor distinguishes `Always` from `Agent Requested`). `sync doctor` verifies the field: a healthy report means the rules file exists, its hash matches the lock, and it declares `alwaysApply: true`. `sync doctor` is read-only Cursor diagnostics: exit code 0 means healthy, 1 means issues were found (cursor harness only). Does NOT modify project-owned `.cursor` content, and does not generate `.cursor/cli.json` or `.agents/skills`. Skills are copied verbatim — SKILL.md bodies are not rewritten for Cursor. See `sync_cursor.py` for details.
 
 ## Knowledge Store
 

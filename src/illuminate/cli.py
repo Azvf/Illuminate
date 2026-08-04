@@ -638,6 +638,8 @@ def _cmd_sync_doctor(args):
         print(f"    exists:      {r['exists']}", file=sys.stderr)
         if r["exists"]:
             print(f"    hash match:  {r['hash_matches']}", file=sys.stderr)
+            if "always_apply" in r:
+                print(f"    always apply:{r['always_apply']}", file=sys.stderr)
     if report["skills"]["missing"] or report["skills"]["hash_mismatch"]:
         for p in report["skills"]["missing"]:
             print(f"  Missing skill: {p}", file=sys.stderr)
@@ -654,6 +656,7 @@ def _cmd_sync_doctor(args):
     healthy = (
         report["lock_exists"]
         and not report["lock_errors"]
+        and not report["errors"]
         and report["rules"] is not None
         and report["rules"]["exists"]
         and report["rules"]["hash_matches"]

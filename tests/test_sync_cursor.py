@@ -72,7 +72,7 @@ class TestSyncCursor(unittest.TestCase):
         rules_path = repo / _RULES_REL
         self.assertTrue(rules_path.exists())
         text = rules_path.read_text(encoding="utf-8")
-        self.assertRegex(text, r"^---\ndescription: .+\n---")
+        self.assertRegex(text, r"^---\ndescription: .+\nalwaysApply: true\n---")
         self.assertIn("Synchronized skills:", text)
 
     # ── Skills ──
@@ -647,6 +647,28 @@ class TestSyncCursor(unittest.TestCase):
         clean_sync(repo)
         self.assertNotIn(_BEGIN_MARKER, agents_path.read_text(encoding="utf-8"))
 
+    def test_clean_compat_preserves_tampered_agents_block(self):
+        """If AGENTS.md was modified (by Codex or the user) since our sync, clean
+        must NOT delete the illuminate block even in compat mode."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+        # Tamper with the block so its hash no longer matches the lock.
+        content = agents_path.read_text(encoding="utf-8")
+        agents_path.write_text(
+            content.replace("Synchronized skills:", "Synchronized skillz:"),
+            encoding="utf-8",
+        )
+        self.assertIn(_BEGIN_MARKER, agents_path.read_text(encoding="utf-8"))
+
+        clean_sync(repo)
+
+        self.assertIn(
+            _BEGIN_MARKER, agents_path.read_text(encoding="utf-8"),
+            "A tampered AGENTS.md block must be preserved, not deleted",
+        )
+
     # ── Doctor (read-only) ──
 
     def test_doctor_healthy_after_sync(self):
@@ -659,6 +681,7 @@ class TestSyncCursor(unittest.TestCase):
         self.assertEqual(report["mode"], "mdc")
         self.assertTrue(report["rules"]["exists"])
         self.assertTrue(report["rules"]["hash_matches"])
+        self.assertTrue(report["rules"]["always_apply"])
         self.assertEqual(report["skills"]["missing"], [])
         self.assertEqual(report["skills"]["hash_mismatch"], [])
         self.assertEqual(report["commands"]["missing"], [])
@@ -674,6 +697,26 @@ class TestSyncCursor(unittest.TestCase):
         self.assertTrue(report["lock_exists"])
         self.assertFalse(report["rules"]["exists"])
         self.assertFalse(report["rules"]["hash_matches"])
+
+    def test_doctor_detects_missing_always_apply(self):
+        """When the .mdc loses its alwaysApply: true line, doctor flags it as an
+        error so Cursor is not silently left without auto-loaded governance."""
+        repo = self._make_repo()
+        sync_cursor(CORE_PACK, repo)
+        rules_path = repo / _RULES_REL
+        text = rules_path.read_text(encoding="utf-8")
+        rules_path.write_text(
+            text.replace("alwaysApply: true\n", ""), encoding="utf-8"
+        )
+
+        report = doctor_sync(repo)
+        self.assertTrue(report["lock_exists"])
+        self.assertTrue(report["rules"]["exists"])
+        self.assertFalse(report["rules"]["always_apply"])
+        self.assertNotEqual(report["errors"], [])
+        self.assertTrue(
+            any("alwaysApply" in e for e in report["errors"]), report["errors"]
+        )
 
     def test_doctor_reports_missing_lock(self):
         repo = self._make_repo()

@@ -26,6 +26,7 @@ Does NOT delete project-owned skills/commands.
 """
 
 import json
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,12 +74,14 @@ _LOCK_FILE = "cursor-lock.json"
 def _build_rules_mdc(block_text: str, description: str) -> str:
     """Wrap the shared Illuminate block body in a Cursor `.mdc` frontmatter.
 
-    Uses the minimal official Cursor frontmatter (`description`). Cursor also
-    supports `globs` and `alwaysApply`, but those are intentionally omitted
-    here: not required for correctness, and the policy is applied uncondition-
-    ally. Add them later if a concrete selection need arises.
+    Uses `description` plus `alwaysApply: true`: the governance policy must
+    reliably enter every Cursor context on each load, not only when a glob
+    matches. `alwaysApply` is what guarantees this unconditional loading.
     """
-    return f"---\ndescription: {description}\n---\n\n{block_text.strip()}\n"
+    return (
+        f"---\ndescription: {description}\nalwaysApply: true\n---\n\n"
+        f"{block_text.strip()}\n"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -471,15 +474,28 @@ def doctor_sync(repo_root: Path) -> dict:
         key = "rules_md_hash"
         label = _RULES_REL
     if not rules_path.exists():
-        report["rules"] = {"path": label, "exists": False, "hash_matches": False}
+        report["rules"] = {"path": label, "exists": False, "hash_matches": False, "always_apply": None}
     else:
         expected = lock.get(key)
         actual = hash_file(rules_path)
+        always_apply = None  # AGENTS.md is always loaded, so N/A in compat mode
+        if not agents_compat:
+            text = rules_path.read_text(encoding="utf-8")
+            always_apply = bool(re.search(r"(?m)^alwaysApply:\s*true", text))
         report["rules"] = {
             "path": label,
             "exists": True,
             "hash_matches": (expected == actual),
+            "always_apply": always_apply,
         }
+        if (
+            not agents_compat
+            and report["rules"]["always_apply"] is False
+        ):
+            report["errors"].append(
+                f"{_RULES_REL} missing alwaysApply: true — Cursor will not "
+                "auto-load governance policy"
+            )
 
     # Skills
     for skill_entry in lock.get("skills", []):
@@ -564,7 +580,17 @@ def clean_sync(repo_root: Path) -> dict:
     # untouched (consistent with skills/commands).
     if agents_compat:
         agents_path = repo_root / "AGENTS.md"
-        if agents_path.exists():
+        # Fail-safe: only remove the block we wrote when the current file is
+        # byte-identical to the lock-recorded hash. AGENTS.md may be shared with
+        # Codex or modified by the user, so never delete a block whose hash no
+        # longer matches. If the lock has no agents_md_hash (an old lock), we
+        # cannot prove ownership, so conservatively skip deletion.
+        prev_hash = lock.get("agents_md_hash")
+        if (
+            prev_hash
+            and agents_path.exists()
+            and hash_file(agents_path) == prev_hash
+        ):
             content = agents_path.read_text(encoding="utf-8")
             new_content = remove_block(content)
             if new_content != content:
