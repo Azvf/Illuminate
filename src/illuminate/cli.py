@@ -20,8 +20,8 @@ Commands:
     illuminate knowledge status --repo <path> [--store <dir>] [--manifest <json>]
     illuminate knowledge push --repo <path> [--store <dir>] [--manifest <json>] [--force]
     illuminate knowledge candidate --repo <path> --source <path> --target <kind> [--anchor <ref>] [--notes <text>] [--store <dir>]
-    illuminate knowledge review --repo <path> --id <id> [--reviewer <name>] [--notes <text>] [--store <dir>]
-    illuminate knowledge promote --repo <path> --id <id> --pack <dir> [--target-path <path>] [--content <path>] [--dry-run] [--force] [--store <dir>]
+    illuminate knowledge review --repo <path> --id <id> [--reviewer <name>] [--content <path>] [--notes <text>] [--store <dir>]
+    illuminate knowledge promote --repo <path> --id <id> --pack <dir> [--target-path <path>] [--dry-run] [--force] [--store <dir>]
     illuminate knowledge reject --repo <path> --id <id> [--reviewer <name>] [--superseded] [--notes <text>] [--store <dir>]
     illuminate docs export-human --source <dir> --output <dir> [--config <json>]
     illuminate docs lint-human --source <dir> [--config <json>] [--all-markdown]
@@ -207,6 +207,7 @@ def _build_parser():
     kr.add_argument("--repo", required=True, help="Target repository path")
     kr.add_argument("--id", required=True, help="Candidate ID")
     kr.add_argument("--reviewer", default=None, help="Reviewer name")
+    kr.add_argument("--content", default=None, help="Generalized draft file path (CWD-relative; binds reviewed bytes to the draft instead of the source)")
     kr.add_argument("--notes", default=None, help="Review notes")
     kr.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
 
@@ -215,7 +216,6 @@ def _build_parser():
     kpm.add_argument("--id", required=True, help="Candidate ID")
     kpm.add_argument("--pack", required=True, help="Pack directory to promote into")
     kpm.add_argument("--target-path", default=None, help="Pack-relative target path (default: <kind>s/<source path>)")
-    kpm.add_argument("--content", default=None, help="Generalized content file path (CWD-relative; default: candidate source doc)")
     kpm.add_argument("--dry-run", action="store_true", help="Print the promotion plan without writing")
     kpm.add_argument("--force", action="store_true", help="Overwrite an existing pack file")
     kpm.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
@@ -843,6 +843,7 @@ def _cmd_knowledge_review(args):
         print(f"Error: repository not found: {repo}", file=sys.stderr)
         return 1
     store = Path(args.store) if args.store else None
+    content_path = Path(args.content).resolve() if args.content else None
 
     try:
         result = knowledge_review(
@@ -851,6 +852,7 @@ def _cmd_knowledge_review(args):
             store=store,
             reviewer=args.reviewer,
             notes=args.notes,
+            content_path=content_path,
         )
     except PromotionError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -875,7 +877,6 @@ def _cmd_knowledge_promote(args):
         print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
         return 1
     store = Path(args.store) if args.store else None
-    content_path = Path(args.content).resolve() if args.content else None
 
     try:
         result = knowledge_promote(
@@ -884,7 +885,6 @@ def _cmd_knowledge_promote(args):
             pack_dir,
             store=store,
             target_path=args.target_path,
-            content_path=content_path,
             dry_run=args.dry_run,
             force=args.force,
         )

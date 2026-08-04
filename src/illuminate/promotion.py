@@ -11,9 +11,17 @@ the candidate moved raw -> reviewed. This prevents "review A, promote B". The
 state machine is unchanged (raw -> reviewed -> promoted); hash fields are data
 enhancements, not a new state machine.
 
+draft-review flow: ``knowledge_review`` may take a ``content_path`` to a
+generalized draft. When given, the draft's bytes are snapshotted to
+``promotions/<id>/draft.md`` and its hash is bound as ``reviewed_sha256``;
+``knowledge_promote`` then writes that already-reviewed draft (or the current
+source when the candidate was reviewed without a draft, validated to still
+hash to the reviewed bytes). Either way, promote never accepts unreviewed
+bytes.
+
 Store remains the backup tool; this module only adds the promotion registry.
 Source snapshots live in ``<store>/projects/<project-id>/promotions/<id>/`` as
-``source.md`` (candidate creation) and ``draft.md`` (generalized promote).
+``source.md`` (candidate creation) and ``draft.md`` (generalized review).
 """
 
 import hashlib
@@ -123,8 +131,17 @@ def _git_source(repo_root: Path) -> tuple:
     return remote, commit
 
 
-def _candidate_id(commit: Optional[str], repo_root: Path, source: str, anchor: Optional[str]) -> str:
-    seed = f"{commit or ''}|{repo_root}|{source}|{anchor or ''}"
+def _candidate_id(
+    commit: Optional[str],
+    repo_root: Path,
+    source: str,
+    anchor: Optional[str],
+    target: str,
+    source_sha256: str,
+) -> str:
+    seed = (
+        f"{commit or ''}|{repo_root}|{source}|{anchor or ''}|{target}|{source_sha256}"
+    )
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
 
 
@@ -381,7 +398,7 @@ def knowledge_candidate(
 
     project_id, project_dir, candidates = _load(store, repo_root)
     remote, commit = _git_source(repo_root)
-    candidate_id = _candidate_id(commit, repo_root, source, anchor)
+    candidate_id = _candidate_id(commit, repo_root, source, anchor, target, source_sha256)
     for existing in candidates:
         if existing.get("id") == candidate_id:
             return existing
@@ -419,13 +436,16 @@ def knowledge_review(
     store=None,
     reviewer=None,
     notes=None,
+    content_path: Optional[Path] = None,
 ) -> dict:
     """Move a candidate from raw to reviewed, binding the reviewed bytes.
 
-    ``reviewed_sha256`` is the hash of the exact content under review (the
-    source snapshot, falling back to the current source file for legacy
-    registry entries). Promote later refuses any bytes that do not hash to this
-    value.
+    Without ``content_path`` the reviewed bytes are the source snapshot
+    (falling back to the current source file for legacy registry entries), and
+    the candidate is not ``generalized``. With ``content_path`` the given draft
+    file is read, snapshotted to ``promotions/<id>/draft.md``, and its bytes
+    become the reviewed content (the candidate is marked ``generalized``).
+    Promote later refuses any bytes that do not hash to ``reviewed_sha256``.
     """
     repo_root = Path(repo_root).resolve()
     _, project_dir, candidates = _load(store, repo_root)
@@ -443,9 +463,23 @@ def knowledge_review(
         raise PromotionError(
             f"cannot review candidate in status '{record['status']}' (expected 'raw')"
         )
-    reviewed = _reviewed_content(repo_root, project_dir, record)
+    if content_path is not None:
+        content_path = Path(content_path).resolve()
+        try:
+            content = content_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise PromotionError(
+                f"cannot read content_path: {content_path}: {exc}"
+            ) from exc
+        draft_file = _write_snapshot(project_dir, candidate_id, content, "draft")
+        record["draft_file"] = draft_file
+        record["draft_sha256"] = _sha256(content)
+        record["generalized"] = True
+    else:
+        content = _reviewed_content(repo_root, project_dir, record)
+        record["generalized"] = False
     record["status"] = "reviewed"
-    record["reviewed_sha256"] = _sha256(reviewed)
+    record["reviewed_sha256"] = _sha256(content)
     record["reviewed_at"] = _now()
     record["reviewer"] = reviewer
     if notes is not None:
@@ -461,18 +495,17 @@ def knowledge_promote(
     pack_dir,
     store=None,
     target_path=None,
-    content_path=None,
     dry_run=False,
     force=False,
 ) -> dict:
     """Write a reviewed candidate's content into the pack.
 
-    Content-trust binding: the bytes to be written (current source, or
-    ``content_path`` when generalizing) must hash to ``reviewed_sha256``,
-    otherwise promotion is rejected. With ``--content`` the content is stored as
-    ``promotions/<id>/draft.md`` (``draft_sha256``/``draft_file``); because the
-    reviewed bytes are pinned to the source snapshot, a valid draft must match
-    the reviewed snapshot byte-for-byte.
+    Content-trust binding: the bytes to be written must hash to
+    ``reviewed_sha256``, otherwise promotion is rejected. The content is the
+    already-reviewed draft snapshot (``draft_file``) when the candidate was
+    reviewed with ``--content``, otherwise the current source document (so a
+    source edit after review is caught and rejected). The draft is recorded by
+    ``knowledge_review``; promote never writes or accepts a draft.
 
     Each target has a dedicated writer that registers the new file in the pack
     manifest and runs validate_pack, rolling back the whole change (files +
@@ -492,14 +525,13 @@ def knowledge_promote(
     target = record["target"]
     source_path = record["source"]["path"]
 
-    # Resolve content and bind it to the reviewed hash.
-    generalized = content_path is not None
-    if generalized:
-        content_path = Path(content_path).resolve()
-        try:
-            content = content_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise PromotionError(f"cannot read content_path: {content_path}: {exc}") from exc
+    # Resolve the content to write: the reviewed draft snapshot when the
+    # candidate was reviewed with --content, otherwise the current source file
+    # (which must still hash to the reviewed bytes, so a source edit after
+    # review is caught and rejected).
+    generalized = record.get("generalized", False)
+    if generalized and record.get("draft_file"):
+        content = (project_dir / record["draft_file"]).read_text(encoding="utf-8")
     else:
         content = _resolve_source(repo_root, source_path).read_text(encoding="utf-8")
 
@@ -531,13 +563,6 @@ def knowledge_promote(
             "generalized": generalized,
         }
 
-    # Persist the draft snapshot (store-side) before committing to the pack.
-    draft_file = None
-    draft_sha256 = None
-    if generalized:
-        draft_file = _write_snapshot(project_dir, candidate_id, content, "draft")
-        draft_sha256 = content_sha256
-
     if target == "reference":
         promote_reference(pack_dir, written, content, force, pack_version)
     elif target == "policy":
@@ -550,8 +575,6 @@ def knowledge_promote(
     record["status"] = "promoted"
     record["target_path"] = written
     record["generalized"] = generalized
-    record["draft_file"] = draft_file
-    record["draft_sha256"] = draft_sha256
     record["pack_version"] = pack_version
     record["updated_at"] = _now()
     _save(project_dir, candidates, record)

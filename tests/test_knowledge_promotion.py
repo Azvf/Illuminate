@@ -237,7 +237,12 @@ class TestKnowledgePromotion(unittest.TestCase):
             repo = Path(tempfile.mkdtemp())
             pack = _make_pack(Path(tempfile.mkdtemp()))
             rel = f"30-modules/doc-{i}.md"
-            _make_repo(repo, rel)
+            if target == "skill":
+                # Skills must carry a legal frontmatter or validate_pack fails.
+                content = f"---\nname: doc-{i}\ndescription: Test skill {i}\n---\n# Doc {i}\n"
+            else:
+                content = ""
+            _make_repo(repo, rel, content)
             cand = knowledge_candidate(repo, rel, target, store=self.store)
             knowledge_review(repo, cand["id"], store=self.store)
             result = knowledge_promote(repo, cand["id"], pack, store=self.store)
@@ -252,38 +257,35 @@ class TestKnowledgePromotion(unittest.TestCase):
                     f"{target} should map to {subdir}/",
                 )
 
-    # ── 8. content_path generalization ──
+    # ── 8. draft-review (content bound at review, consumed at promote) ──
 
     def test_promote_with_content_path(self):
-        # The reviewed bytes are pinned: promote refuses any content that does
-        # not hash to reviewed_sha256, so a valid --content must equal the
-        # reviewed snapshot. Here we review "# Demo\n" and pass identical bytes.
-        cand = self._reviewed_candidate(content="# Demo\n")
-        content = Path(tempfile.mkdtemp()) / "generalized.md"
-        content.write_text("# Demo\n", encoding="utf-8")
-        result = knowledge_promote(self.repo, cand["id"], self.pack, store=self.store,
-                                   content_path=content)
+        # review --content binds a draft; promote writes that exact draft bytes.
+        _make_repo(self.repo, content="# source\n")
+        cand = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                   store=self.store)
+        draft = Path(tempfile.mkdtemp()) / "draft.md"
+        draft.write_text("# Generalized draft\n", encoding="utf-8")
+        reviewed = knowledge_review(self.repo, cand["id"], store=self.store,
+                                    content_path=draft)
+        self.assertTrue(reviewed["generalized"])
+        self.assertEqual(reviewed["reviewed_sha256"], _sha256(draft.read_text(encoding="utf-8")))
+        # Draft snapshot stored under store promotions/<id>/draft.md at review.
+        draft_copy = (self.store / "projects" / _derive_project_id(self.repo)
+                      / "promotions" / cand["id"] / "draft.md")
+        self.assertTrue(draft_copy.exists())
+        self.assertEqual(draft_copy.read_text(encoding="utf-8"),
+                         draft.read_text(encoding="utf-8"))
+
+        result = knowledge_promote(self.repo, cand["id"], self.pack, store=self.store)
         self.assertTrue(result["generalized"])
         candidate = _find(self.store, self.repo, cand["id"])
         self.assertTrue(candidate["generalized"])
-        # Pack file holds the (reviewed) content
+        # Pack file holds the reviewed draft content.
         self.assertEqual(
             (self.pack / "references" / "demo.md").read_text(encoding="utf-8"),
-            content.read_text(encoding="utf-8"),
+            draft.read_text(encoding="utf-8"),
         )
-        # Generalized draft snapshot stored under store promotions/<id>/draft.md
-        promoted_copy = (self.store / "projects" / _derive_project_id(self.repo)
-                         / "promotions" / cand["id"] / "draft.md")
-        self.assertEqual(promoted_copy.read_text(encoding="utf-8"),
-                         content.read_text(encoding="utf-8"))
-
-    def test_promote_rejects_content_different_from_reviewed(self):
-        cand = self._reviewed_candidate()  # binds default source content
-        other = Path(tempfile.mkdtemp()) / "draft.md"
-        other.write_text("# A different, unreviewed draft\n", encoding="utf-8")
-        with self.assertRaises(PromotionError):
-            knowledge_promote(self.repo, cand["id"], self.pack, store=self.store,
-                              content_path=other)
 
     def test_promote_without_content_uses_source_doc(self):
         cand = self._reviewed_candidate(content="# Original source\n")
@@ -483,7 +485,8 @@ class TestKnowledgePromotion(unittest.TestCase):
     def test_promote_skill_registers_manifest_and_contract(self):
         repo = Path(tempfile.mkdtemp())
         pack = _make_pack(Path(tempfile.mkdtemp()))
-        _make_repo(repo, "30-modules/my-skill.md", "# My skill\n")
+        skill_content = "---\nname: my-skill\ndescription: Test skill\n---\n# My skill\n"
+        _make_repo(repo, "30-modules/my-skill.md", skill_content)
         cand = knowledge_candidate(repo, "30-modules/my-skill.md", "skill",
                                    store=self.store)
         knowledge_review(repo, cand["id"], store=self.store)
@@ -503,13 +506,15 @@ class TestKnowledgePromotion(unittest.TestCase):
         self.assertTrue(ok, errors)
 
     def test_promote_skill_same_name_requires_force(self):
-        _make_repo(self.repo, "30-modules/demo.md", "# Skill A\n")
+        _make_repo(self.repo, "30-modules/demo.md",
+                   "---\nname: demo\ndescription: Skill A\n---\n# Skill A\n")
         c1 = knowledge_candidate(self.repo, "30-modules/demo.md", "skill",
                                  store=self.store)
         knowledge_review(self.repo, c1["id"], store=self.store)
         knowledge_promote(self.repo, c1["id"], self.pack, store=self.store)
 
-        _make_repo(self.repo, "30-modules/other.md", "# Skill B\n")
+        content_b = "---\nname: demo\ndescription: Skill B\n---\n# Skill B\n"
+        _make_repo(self.repo, "30-modules/other.md", content_b)
         c2 = knowledge_candidate(self.repo, "30-modules/other.md", "skill",
                                  store=self.store)
         knowledge_review(self.repo, c2["id"], store=self.store)
@@ -523,7 +528,7 @@ class TestKnowledgePromotion(unittest.TestCase):
         self.assertEqual(result["status"], "promoted")
         self.assertEqual(
             (self.pack / "skills" / "demo" / "SKILL.md").read_text(encoding="utf-8"),
-            "# Skill B\n",
+            content_b,
         )
 
     def test_promote_policy_registers_in_index(self):
@@ -689,7 +694,8 @@ class TestKnowledgePromotion(unittest.TestCase):
             {"id": "demo.pack.broken", "path": "references/broken.md"}
         )
         (pack / "pack.json").write_text(json.dumps(manifest), encoding="utf-8")
-        _make_repo(repo, "30-modules/fresh.md", "# Fresh skill\n")
+        _make_repo(repo, "30-modules/fresh.md",
+                   "---\nname: fresh\ndescription: Fresh skill\n---\n# Fresh skill\n")
         cand = knowledge_candidate(repo, "30-modules/fresh.md", "skill",
                                    store=self.store)
         knowledge_review(repo, cand["id"], store=self.store)
@@ -773,6 +779,56 @@ class TestKnowledgePromotion(unittest.TestCase):
         # Old config is no longer referenced and must be removed.
         self.assertFalse(old_path.exists())
         self.assertTrue((pack / "evidence" / "new.md").exists())
+
+
+    # ── 23. P3: draft-review + candidate-id with content/target ──
+
+    def test_review_content_binds_draft_hash(self):
+        _make_repo(self.repo, content="# source\n")
+        cand = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                   store=self.store)
+        draft = Path(tempfile.mkdtemp()) / "draft.md"
+        draft.write_text("# Reviewed draft\n", encoding="utf-8")
+        reviewed = knowledge_review(self.repo, cand["id"], store=self.store,
+                                    content_path=draft)
+        self.assertEqual(reviewed["reviewed_sha256"],
+                         _sha256(draft.read_text(encoding="utf-8")))
+        self.assertTrue(reviewed["generalized"])
+
+    def test_promote_skill_without_frontmatter_fails(self):
+        repo = Path(tempfile.mkdtemp())
+        pack = _make_pack(Path(tempfile.mkdtemp()))
+        _make_repo(repo, "30-modules/nofm.md", "# No fm\n")
+        cand = knowledge_candidate(repo, "30-modules/nofm.md", "skill",
+                                   store=self.store)
+        knowledge_review(repo, cand["id"], store=self.store)
+        before = (pack / "pack.json").read_bytes()
+        with self.assertRaises(PromotionError):
+            knowledge_promote(repo, cand["id"], pack, store=self.store)
+        # No residual in the pack: skill dir rolled back, manifest restored.
+        self.assertFalse((pack / "skills" / "nofm").exists())
+        self.assertEqual((pack / "pack.json").read_bytes(), before)
+        candidate = _find(self.store, repo, cand["id"])
+        self.assertEqual(candidate["status"], "reviewed")
+
+    def test_candidate_id_changes_with_content(self):
+        # Non-git repo: source_sha256 participates in the id, so editing the
+        # file content yields a different candidate id.
+        _make_repo(self.repo, content="# v1\n")
+        first = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                    store=self.store)
+        _make_repo(self.repo, content="# v2\n")
+        second = knowledge_candidate(self.repo, "30-modules/demo.md", "reference",
+                                     store=self.store)
+        self.assertNotEqual(first["id"], second["id"])
+
+    def test_candidate_id_differs_by_target(self):
+        _make_repo(self.repo, content="# shared\n")
+        as_reference = knowledge_candidate(self.repo, "30-modules/demo.md",
+                                           "reference", store=self.store)
+        as_policy = knowledge_candidate(self.repo, "30-modules/demo.md",
+                                        "policy", store=self.store)
+        self.assertNotEqual(as_reference["id"], as_policy["id"])
 
 
 if __name__ == "__main__":

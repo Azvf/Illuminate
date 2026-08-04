@@ -228,18 +228,18 @@ Pull keeps the previous three-way baseline for conflicts and deletions. Push ref
 
 Knowledge Promotion Bridge is a thin bridge between the Store (backup tool) and the Harness Pack (Git-versioned, reviewed general knowledge). The Store still only handles backup/diff/conflict/restore; it does not perform cross-project generalization or publishing.
 
-Promotion state follows `raw → reviewed → promoted`, with `raw`/`reviewed → rejected` and `promoted → superseded`. The registry lives at `<store>/projects/<project-id>/promotions.json` (beside `knowledge-lock.json`), with content snapshots stored under `promotions/<id>/source.md` (creation) and `promotions/<id>/draft.md` (generalized promote).
+Promotion state follows `raw → reviewed → promoted`, with `raw`/`reviewed → rejected` and `promoted → superseded`. The registry lives at `<store>/projects/<project-id>/promotions.json` (beside `knowledge-lock.json`), with content snapshots stored under `promotions/<id>/source.md` (creation) and `promotions/<id>/draft.md` (generalized review).
 
 The four commands:
-- `candidate` captures a source document with provenance (git remote, commit, docs-relative path, anchor) and snapshots its exact bytes to `promotions/<id>/source.md` (`source_sha256`).
-- `review` marks a candidate `reviewed` and pins `reviewed_sha256` to the hash of the exact bytes under review (the source snapshot). This is a content-level review binding: it locks what was actually reviewed.
-- `promote` writes content into a Harness Pack (`<pack>/policies|skills|references|evidence/`) and registers it in the pack manifest. It is guarded by `reviewed_sha256`: the bytes to be written must hash to the value recorded at review, otherwise promotion is rejected ("refusing to promote unreviewed bytes"). `--content` (generalize) supplies the bytes from a file, but because the reviewed bytes are pinned to the source snapshot, a valid draft must still match that snapshot byte-for-byte — truly generalizing a different draft requires a later draft-review flow that is not currently supported.
+- `candidate` captures a source document with provenance (git remote, commit, docs-relative path, anchor) and snapshots its exact bytes to `promotions/<id>/source.md` (`source_sha256`). The candidate id is derived from `commit + repo + path + anchor + target + source_sha256`, so the same source can be promoted to different targets, and changed content (even uncommitted, or in a non-git project) yields a new candidate for a v1 → v2 → supersede cycle.
+- `review` marks a candidate `reviewed` and pins `reviewed_sha256` to the hash of the exact bytes under review. By default those are the source snapshot; with `--content <file>` the bytes under review are a generalized draft, which is snapshotted to `promotions/<id>/draft.md` and bound as the reviewed content (the candidate is marked `generalized`).
+- `promote` writes content into a Harness Pack (`<pack>/policies|skills|references|evidence/`) and registers it in the pack manifest. It only consumes already-reviewed bytes — the draft snapshot for a `generalized` candidate, otherwise the current source document — and is guarded by `reviewed_sha256`: anything that does not hash to the value recorded at review is rejected ("refusing to promote unreviewed bytes"), so a source edit after review fails promotion. This closes the draft-review loop: `raw → review --content draft → promote` promotes exactly the reviewed draft.
 - `reject` marks a `raw`/`reviewed` candidate `rejected`; with `--superseded` it marks a `promoted` candidate `superseded`.
 
 Manifest registration per target:
 - `reference` — appended to `pack.json.references`.
 - `policy` — appended to `policies/index.json` (priority 0, lowest).
-- `skill` — writes `skills/<name>/SKILL.md` + a minimal `contract.json` and registers in `pack.json.skills`.
+- `skill` — writes `skills/<name>/SKILL.md` + a minimal `contract.json` and registers in `pack.json.skills`. The source must itself be a valid SKILL.md with `name:`/`description:` frontmatter: `validate_pack` rejects any skill whose `SKILL.md` lacks them, so a promoted skill is guaranteed discoverable by Cursor.
 - `evidence` — sets `pack.json.evidence.config`.
 
 After writing, `promote` runs `validate_pack`; if validation fails the whole change (files + manifest + index) is rolled back. `--target-path` is narrowed to the target's directory (`references/`, `policies/`, `skills/`, `evidence/`) and cannot target governance/index files (`pack.json`, `*.schema.json`, `index.json`) even with `--force`. An existing pack file is only overwritten with `--force`; `--dry-run` writes nothing.
@@ -249,6 +249,7 @@ Promotion does not stage or commit. `promote` only writes into the Pack working 
 ```bash
 illuminate knowledge candidate --repo /path/to/project --source 30-modules/hot-update.md --target reference
 illuminate knowledge review --repo /path/to/project --id <candidate-id> --reviewer alice
-illuminate knowledge promote --repo /path/to/project --id <candidate-id> --pack packs/core --content generalized.md
+illuminate knowledge review --repo /path/to/project --id <candidate-id> --content generalized.md
+illuminate knowledge promote --repo /path/to/project --id <candidate-id> --pack packs/core
 illuminate knowledge reject --repo /path/to/project --id <candidate-id>
 ```
