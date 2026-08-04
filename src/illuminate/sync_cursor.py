@@ -1,24 +1,25 @@
 """Cursor sync: synchronize Illuminate Pack into a target repository for Cursor.
 
 Generates:
-  AGENTS.md                         (Illuminate managed block, merged via markers)
-  .cursor/skills/<name>/            (selected skills, managed via lock ownership)
-  .cursor/commands/<name>.md        (doc-related skill shortcuts, beta)
-  .illuminate/cursor-lock.json      (sync manifest with hashes)
+  .cursor/rules/illuminate/core.mdc   (Illuminate rules file, Cursor format)
+  .cursor/skills/<name>/              (selected skills, managed via lock ownership)
+  .cursor/commands/<name>.md          (doc-related skill shortcuts, beta)
+  .illuminate/cursor-lock.json        (sync manifest with hashes)
 
 Notes:
-  - This adapter shares the root AGENTS.md illuminate block with the Codex
-    adapter. The block content is harness-agnostic, and the last writer wins
-    (either adapter re-merges the same block when it runs). Because the lock
-    records the hash of the whole AGENTS.md, syncing/cleaning one harness can
-    make the other harness's `sync check` fail until it is re-synced; this is
-    expected and documented here rather than special-cased per harness.
+  - Cursor owns a dedicated rules file (`.cursor/rules/illuminate/core.mdc`)
+    and does NOT manage the root AGENTS.md by default. This keeps Cursor's
+    skill selection independent from the Codex/CodeBuddy AGENTS.md block, so
+    different harnesses choosing different skills do not overwrite each other.
+  - `agents_compat=True` restores the legacy behaviour of merging into the root
+    AGENTS.md block, for projects that must share AGENTS.md with the Codex CLI.
+    The chosen mode is recorded in the lock (`agents_compat`), so check/clean
+    follow the same path that sync used.
   - `.cursor/commands` is in beta: commands are only registered, never
     executed, and the capability is marked "beta" in the lock.
   - Permissions are declarative-only: no executable policy is generated.
-  - The adapter does NOT generate `.cursor/rules`, `.cursor/cli.json`, or
-    `.agents/skills`, and it does NOT rewrite SKILL.md bodies for Cursor
-    (skills are copied verbatim).
+  - The adapter does NOT generate `.cursor/cli.json` or `.agents/skills`, and
+    it does NOT rewrite SKILL.md bodies for Cursor (skills are copied verbatim).
 
 Does NOT modify project content outside Illuminate-managed paths.
 Does NOT delete project-owned skills/commands.
@@ -34,7 +35,11 @@ from .command_catalog import build_command_catalog
 from .sync_shared import (
     build_agents_block,
     check_managed_file_hashes,
+    ensure_writable,
+    preflight_managed_command_tree,
+    preflight_managed_skill_tree,
     remove_empty_parent_dirs,
+    sync_managed_command_tree,
     sync_managed_skill_tree,
 )
 from .hashutil import hash_file, hash_directory, lock_hash
@@ -54,8 +59,26 @@ from .validate import validate_pack
 
 _SKILLS_DIR = ".cursor/skills"
 _COMMANDS_DIR = ".cursor/commands"
+_RULES_DIR = ".cursor/rules/illuminate"
+_RULES_FILE = "core.mdc"
+_RULES_REL = f"{_RULES_DIR}/{_RULES_FILE}"
 _LOCK_DIR = ".illuminate"
 _LOCK_FILE = "cursor-lock.json"
+
+
+# ---------------------------------------------------------------------------
+# Rules file (Cursor .mdc)
+# ---------------------------------------------------------------------------
+
+def _build_rules_mdc(block_text: str, description: str) -> str:
+    """Wrap the shared Illuminate block body in a Cursor `.mdc` frontmatter.
+
+    Uses the minimal official Cursor frontmatter (`description`). Cursor also
+    supports `globs` and `alwaysApply`, but those are intentionally omitted
+    here: not required for correctness, and the policy is applied uncondition-
+    ally. Add them later if a concrete selection need arises.
+    """
+    return f"---\ndescription: {description}\n---\n\n{block_text.strip()}\n"
 
 
 # ---------------------------------------------------------------------------
@@ -89,33 +112,42 @@ def _sync_commands(
     Only commands whose skill is exposed are written. SKILL.md bodies are
     never rewritten; the command merely carries the skill's prompt.
 
-    Commands recorded in a previous lock but no longer generated are removed,
-    so a stale command that points at a no-longer-exposed skill cannot linger
-    in `.cursor/commands/`.
+    Uses the shared command syncer: only files recorded as previously managed
+    are replaced or removed, so a project-owned command sharing a name fails
+    closed instead of being overwritten.
 
     Returns {filename: sha256}.
     """
-    commands_dir = repo_root / _COMMANDS_DIR
-    commands_dir.mkdir(parents=True, exist_ok=True)
+    return sync_managed_command_tree(
+        repo_root / _COMMANDS_DIR,
+        _desired_commands(exposed),
+        previous_commands or {},
+    )
 
-    hashes: Dict[str, str] = {}
-    written: Set[str] = set()
-    for name, spec in build_command_catalog().items():
-        if spec.skill_id not in exposed:
-            continue
-        cmd_path = commands_dir / f"{name}.md"
-        cmd_path.write_text(spec.prompt, encoding="utf-8")
-        hashes[f"{name}.md"] = hash_file(cmd_path)
-        written.add(f"{name}.md")
 
-    # Remove stale managed commands no longer generated
-    for filename in (previous_commands or {}):
-        if filename not in written:
-            cmd_path = commands_dir / filename
-            if cmd_path.exists():
-                cmd_path.unlink()
+def _desired_commands(exposed: Set[str]) -> Dict[str, str]:
+    """Map command filenames to content.
 
-    return hashes
+    Standalone commands (``skill_id is None``) are always included; commands
+    bound to a skill are included only when that skill is exposed. The explicit
+    ``None`` check is required because ``spec.skill_id in exposed`` would raise
+    TypeError for ``None``.
+    """
+    return {
+        f"{name}.md": spec.prompt
+        for name, spec in build_command_catalog().items()
+        if spec.skill_id is None or spec.skill_id in exposed
+    }
+
+
+def _preflight_target_paths(repo_root: Path, agents_compat: bool) -> None:
+    """Verify every target Illuminate will create/write under repo_root is
+    writable (or creatable), including an already-existing target file itself
+    (not just its parent directory). Fails closed before any write."""
+    artifacts = [_SKILLS_DIR, _COMMANDS_DIR, _LOCK_DIR]
+    artifacts.append("AGENTS.md" if agents_compat else _RULES_REL)
+    for rel in artifacts:
+        ensure_writable(repo_root / rel)
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +161,8 @@ def _write_lock(
     exposed: Set[str],
     skill_hashes: Dict[str, Dict[str, str]],
     command_hashes: Dict[str, str],
-    agents_hash: str,
+    agents_compat: bool,
+    rules_artifact_hash: str,
 ) -> dict:
     """Write .illuminate/cursor-lock.json."""
     lock_dir = repo_root / _LOCK_DIR
@@ -146,8 +179,9 @@ def _write_lock(
         for name, file_hashes in skill_hashes.items()
     ]
 
+    rules_artifact = "AGENTS.md" if agents_compat else _RULES_REL
     managed_artifacts = [
-        "AGENTS.md",
+        rules_artifact,
         *[
             f"{_SKILLS_DIR}/{entry['name']}/{rel}"
             for entry in skill_entries
@@ -176,8 +210,12 @@ def _write_lock(
         "exposed_skills": sorted(exposed),
         "skills": skill_entries,
         "commands": command_hashes,
-        "agents_md_hash": agents_hash,
+        "agents_compat": agents_compat,
     })
+    if agents_compat:
+        lock["agents_md_hash"] = rules_artifact_hash
+    else:
+        lock["rules_md_hash"] = rules_artifact_hash
 
     lock_path = lock_dir / _LOCK_FILE
     with open(lock_path, "w", encoding="utf-8") as f:
@@ -195,6 +233,7 @@ def sync_cursor(
     pack_dir: Path,
     repo_root: Path,
     skill_filter: Optional[List[str]] = None,
+    agents_compat: bool = False,
 ) -> dict:
     """Synchronize Illuminate Pack into a target repository for Cursor.
 
@@ -202,10 +241,18 @@ def sync_cursor(
       1. Validate pack.
       2. Resolve exposed skills via the shared resolver (filter + alias +
          conflict checks).
-      3. Sync .cursor/skills/ (pre-flight collision check, lock-owned).
-      4. Sync .cursor/commands/ (beta, doc-related skill shortcuts).
-      5. Merge AGENTS.md illuminate block.
-      6. Write .illuminate/cursor-lock.json.
+      3. Phase 1 preflight: run every collision / writability check
+         (skills, commands, lock) before writing anything.
+      4. Phase 2 write: sync .cursor/skills/, sync .cursor/commands/ (beta),
+         write the Cursor rules artifact (`.cursor/rules/illuminate/core.mdc`,
+         or the root AGENTS.md block when `agents_compat=True`), and write
+         .illuminate/cursor-lock.json.
+
+    `agents_compat=True` merges into the root AGENTS.md instead of writing
+    `.cursor/rules/illuminate/core.mdc`; use it only for projects that must
+    share AGENTS.md with the Codex CLI.
+
+    Any preflight failure raises ValueError with no file written.
 
     Returns a summary dict.
     """
@@ -222,10 +269,22 @@ def sync_cursor(
     manifest = resolved["manifest"]
     exposed = set(resolved["skills"]["exposed"])
 
-    # 3. Sync skills (pre-flight collision check is built into the shared
-    #    helper; fails closed before any repo modification)
     lock = _load_lock(repo_root)
     managed_skills = _managed_skills(lock)
+    previous_commands = lock.get("commands")
+
+    # 3. Phase 1 — preflight: run every collision / writability check before
+    #    touching the repo, so any failure leaves no partial write behind.
+    preflight_managed_skill_tree(
+        repo_root / _SKILLS_DIR, manifest, exposed, managed_skills
+    )
+    desired_commands = _desired_commands(exposed)
+    preflight_managed_command_tree(
+        repo_root / _COMMANDS_DIR, desired_commands, previous_commands or {}
+    )
+    _preflight_target_paths(repo_root, agents_compat)
+
+    # 4. Phase 2 — write.
     skill_hashes = sync_managed_skill_tree(
         pack_dir,
         repo_root / _SKILLS_DIR,
@@ -233,18 +292,39 @@ def sync_cursor(
         exposed,
         managed_skills,
     )
+    command_hashes = _sync_commands(repo_root, exposed, previous_commands)
 
-    # 4. Sync commands (beta); stale commands from a previous lock are removed
-    command_hashes = _sync_commands(repo_root, exposed, lock.get("commands"))
-
-    # 5. Merge AGENTS.md
-    agents_path = repo_root / "AGENTS.md"
+    # Write the rules artifact (dedicated .mdc, or AGENTS.md in compat mode).
     block_text = build_agents_block(pack_dir, manifest, exposed)
-    new_content, agents_modified = merge_block(agents_path, block_text)
-    agents_path.write_text(new_content, encoding="utf-8")
-    agents_hash = hash_file(agents_path)
+    if agents_compat:
+        agents_path = repo_root / "AGENTS.md"
+        new_content, modified = merge_block(agents_path, block_text)
+        agents_path.write_text(new_content, encoding="utf-8")
+        rules_artifact_hash = hash_file(agents_path)
+    else:
+        # Switching from agents_compat to default: remove the AGENTS.md block
+        # we previously wrote, but only if it is still byte-identical to the
+        # lock-recorded hash (never delete a block that Codex or the user has
+        # since modified).
+        prev_agents_hash = lock.get("agents_md_hash")
+        if prev_agents_hash:
+            agents_path = repo_root / "AGENTS.md"
+            if (
+                agents_path.exists()
+                and hash_file(agents_path) == prev_agents_hash
+            ):
+                new_content = remove_block(agents_path.read_text(encoding="utf-8"))
+                agents_path.write_text(new_content, encoding="utf-8")
 
-    # 6. Write lock
+        rules_path = repo_root / _RULES_DIR / _RULES_FILE
+        rules_path.parent.mkdir(parents=True, exist_ok=True)
+        new_mdc = _build_rules_mdc(block_text, "Illuminate governance rules")
+        old_mdc = rules_path.read_text(encoding="utf-8") if rules_path.exists() else None
+        modified = (new_mdc != old_mdc)
+        rules_path.write_text(new_mdc, encoding="utf-8")
+        rules_artifact_hash = hash_file(rules_path)
+
+    # Write lock
     _write_lock(
         repo_root,
         pack_dir,
@@ -252,7 +332,8 @@ def sync_cursor(
         exposed,
         skill_hashes,
         command_hashes,
-        agents_hash,
+        agents_compat,
+        rules_artifact_hash,
     )
 
     return {
@@ -261,7 +342,8 @@ def sync_cursor(
         "exposed_skills": sorted(exposed),
         "skills_copied": len(skill_hashes),
         "commands_copied": len(command_hashes),
-        "agents_modified": agents_modified,
+        "rules_modified": modified,
+        "agents_compat": agents_compat,
     }
 
 
@@ -286,18 +368,29 @@ def check_sync(pack_dir: Path, repo_root: Path) -> Tuple[bool, List[str]]:
     if lock.get("pack", {}).get("hash") != current_pack_hash:
         issues.append("Pack source changed — run sync again")
 
-    # Check AGENTS.md block + hash
-    agents_path = repo_root / "AGENTS.md"
-    if not agents_path.exists():
-        issues.append("AGENTS.md not found")
+    agents_compat = lock.get("agents_compat", False)
+
+    # Check the rules artifact (dedicated .mdc, or AGENTS.md in compat mode).
+    if agents_compat:
+        agents_path = repo_root / "AGENTS.md"
+        if not agents_path.exists():
+            issues.append("AGENTS.md not found")
+        else:
+            content = agents_path.read_text(encoding="utf-8")
+            if _BEGIN_MARKER not in content:
+                issues.append("AGENTS.md missing illuminate block markers")
+            if lock.get("agents_md_hash"):
+                actual = hash_file(agents_path)
+                if actual != lock["agents_md_hash"]:
+                    issues.append("AGENTS.md hash mismatch — run sync again")
     else:
-        content = agents_path.read_text(encoding="utf-8")
-        if _BEGIN_MARKER not in content:
-            issues.append("AGENTS.md missing illuminate block markers")
-        if lock.get("agents_md_hash"):
-            actual = hash_file(agents_path)
-            if actual != lock["agents_md_hash"]:
-                issues.append("AGENTS.md hash mismatch — run sync again")
+        rules_path = repo_root / _RULES_DIR / _RULES_FILE
+        if not rules_path.exists():
+            issues.append(f"{_RULES_REL} not found — run sync again")
+        elif lock.get("rules_md_hash"):
+            actual = hash_file(rules_path)
+            if actual != lock["rules_md_hash"]:
+                issues.append(f"{_RULES_REL} hash mismatch — run sync again")
 
     # Check skills via the shared helper
     check_managed_file_hashes(
@@ -321,6 +414,102 @@ def check_sync(pack_dir: Path, repo_root: Path) -> Tuple[bool, List[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Doctor (read-only diagnostic)
+# ---------------------------------------------------------------------------
+
+def doctor_sync(repo_root: Path) -> dict:
+    """Diagnose the Cursor sync without modifying any file.
+
+    Returns a dict describing: whether a lock exists and is well-formed, which
+    sync mode the lock records, whether the rules artifact exists and matches
+    its lock hash, whether lock-recorded skills/commands are complete, and any
+    stale (lock-recorded but now absent) artifacts. Never writes to disk.
+    """
+    repo_root = Path(repo_root).resolve()
+    lock_path = repo_root / _LOCK_DIR / _LOCK_FILE
+    report: dict = {
+        "lock_exists": lock_path.exists(),
+        "lock_errors": [],
+        "mode": None,
+        "rules": None,
+        "skills": {"missing": [], "hash_mismatch": []},
+        "commands": {"missing": [], "hash_mismatch": []},
+        "stale": [],
+        "errors": [],
+    }
+
+    if not lock_path.exists():
+        report["errors"].append("cursor-lock.json not found — run 'illuminate sync cursor'")
+        return report
+
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        report["lock_errors"].append("cursor-lock.json is not valid JSON")
+        return report
+
+    # Structural field completeness
+    required = ["pack", "target", "selection", "managed_artifacts", "skills", "commands"]
+    for field in required:
+        if field not in lock:
+            report["lock_errors"].append(f"lock missing field: {field}")
+    if not isinstance(lock.get("skills"), list):
+        report["lock_errors"].append("lock 'skills' is not a list")
+    if not isinstance(lock.get("commands"), dict):
+        report["lock_errors"].append("lock 'commands' is not a dict")
+
+    agents_compat = bool(lock.get("agents_compat", False))
+    report["mode"] = "agents" if agents_compat else "mdc"
+
+    # Rules artifact
+    if agents_compat:
+        rules_path = repo_root / "AGENTS.md"
+        key = "agents_md_hash"
+        label = "AGENTS.md"
+    else:
+        rules_path = repo_root / _RULES_DIR / _RULES_FILE
+        key = "rules_md_hash"
+        label = _RULES_REL
+    if not rules_path.exists():
+        report["rules"] = {"path": label, "exists": False, "hash_matches": False}
+    else:
+        expected = lock.get(key)
+        actual = hash_file(rules_path)
+        report["rules"] = {
+            "path": label,
+            "exists": True,
+            "hash_matches": (expected == actual),
+        }
+
+    # Skills
+    for skill_entry in lock.get("skills", []):
+        skill_name = skill_entry.get("name")
+        for rel, expected_hash in skill_entry.get("files", {}).items():
+            fpath = repo_root / _SKILLS_DIR / skill_name / rel
+            if not fpath.exists():
+                report["skills"]["missing"].append(f"{_SKILLS_DIR}/{skill_name}/{rel}")
+            elif hash_file(fpath) != expected_hash:
+                report["skills"]["hash_mismatch"].append(f"{_SKILLS_DIR}/{skill_name}/{rel}")
+
+    # Commands
+    for filename, expected_hash in lock.get("commands", {}).items():
+        fpath = repo_root / _COMMANDS_DIR / filename
+        if not fpath.exists():
+            report["commands"]["missing"].append(f"{_COMMANDS_DIR}/{filename}")
+        elif hash_file(fpath) != expected_hash:
+            report["commands"]["hash_mismatch"].append(f"{_COMMANDS_DIR}/{filename}")
+
+    # Stale: lock-recorded artifacts no longer on disk (rules artifact counted
+    # above; skills/commands already reported). Report any managed_artifacts
+    # entry that is absent, since that means a partial deletion happened.
+    for rel in lock.get("managed_artifacts", []):
+        if not (repo_root / rel).exists():
+            report["stale"].append(rel)
+
+    return report
+
+
+# ---------------------------------------------------------------------------
 # Clean
 # ---------------------------------------------------------------------------
 
@@ -328,11 +517,22 @@ def clean_sync(repo_root: Path) -> dict:
     """Remove all Illuminate-synced artifacts from a repository.
 
     Removes:
+      - .cursor/rules/illuminate/ (default mode) or the root AGENTS.md
+        illuminate block (agents_compat mode, recorded in lock)
       - .cursor/skills/ entries recorded in lock
       - .cursor/commands/ entries recorded in lock
-      - AGENTS.md illuminate block
       - .illuminate/cursor-lock.json
       - empty .cursor/skills/ and .cursor/ directories (best-effort)
+
+    In default (.mdc) mode the root AGENTS.md is normally never touched, so
+    cleaning Cursor cannot break another harness's AGENTS.md block. The one
+    exception: when the lock records a previous agents_compat run (an
+    ``agents_md_hash``), the AGENTS.md block we wrote is removed too — but only
+    after verifying the current AGENTS.md is byte-identical to that hash, so a
+    block modified or written by Codex or the user is never deleted.
+
+    Without a lock, clean cannot know what is managed: the rules directory is
+    left untouched along with skills/commands.
 
     Does NOT remove project-owned .cursor content.
     """
@@ -340,6 +540,9 @@ def clean_sync(repo_root: Path) -> dict:
     removed = []
 
     lock = _load_lock(repo_root)
+    lock_path = repo_root / _LOCK_DIR / _LOCK_FILE
+    has_lock = lock_path.exists()
+    agents_compat = bool(lock.get("agents_compat", False))
 
     # Remove managed skills (only those in lock)
     for skill_entry in lock.get("skills", []):
@@ -355,14 +558,38 @@ def clean_sync(repo_root: Path) -> dict:
             cmd_path.unlink()
             removed.append(f"{_COMMANDS_DIR}/{filename}")
 
-    # Remove AGENTS.md block
-    agents_path = repo_root / "AGENTS.md"
-    if agents_path.exists():
-        content = agents_path.read_text(encoding="utf-8")
-        new_content = remove_block(content)
-        if new_content != content:
-            agents_path.write_text(new_content, encoding="utf-8")
-            removed.append("AGENTS.md illuminate block")
+    # Remove the rules artifact. In .mdc mode this is the dedicated rules
+    # directory; in compat mode it is the AGENTS.md illuminate block. Without
+    # a lock we cannot know what is managed, so the rules directory is left
+    # untouched (consistent with skills/commands).
+    if agents_compat:
+        agents_path = repo_root / "AGENTS.md"
+        if agents_path.exists():
+            content = agents_path.read_text(encoding="utf-8")
+            new_content = remove_block(content)
+            if new_content != content:
+                agents_path.write_text(new_content, encoding="utf-8")
+                removed.append("AGENTS.md illuminate block")
+    elif has_lock:
+        rules_dir = repo_root / _RULES_DIR
+        if rules_dir.exists():
+            shutil.rmtree(rules_dir)
+            removed.append(str(_RULES_DIR))
+        # A lock that records a previous agents_compat run (e.g. before the
+        # mode was switched to default) may still own an AGENTS.md block.
+        # Remove it only if it is byte-identical to the lock-recorded hash, so
+        # a block written/modified by Codex or the user is never deleted.
+        prev_agents_hash = lock.get("agents_md_hash")
+        if prev_agents_hash:
+            agents_path = repo_root / "AGENTS.md"
+            if (
+                agents_path.exists()
+                and hash_file(agents_path) == prev_agents_hash
+            ):
+                new_content = remove_block(agents_path.read_text(encoding="utf-8"))
+                if new_content != agents_path.read_text(encoding="utf-8"):
+                    agents_path.write_text(new_content, encoding="utf-8")
+                    removed.append("AGENTS.md illuminate block")
 
     # Remove lock
     lock_path = repo_root / _LOCK_DIR / _LOCK_FILE
@@ -370,12 +597,15 @@ def clean_sync(repo_root: Path) -> dict:
         lock_path.unlink()
         removed.append(f"{_LOCK_DIR}/{_LOCK_FILE}")
 
-    # Best-effort cleanup of empty .cursor subdirs up to the repo root
-    skills_dir = repo_root / _SKILLS_DIR
-    if skills_dir.exists():
-        removed.extend(remove_empty_parent_dirs(skills_dir, repo_root))
-    commands_dir = repo_root / _COMMANDS_DIR
-    if commands_dir.exists():
-        removed.extend(remove_empty_parent_dirs(commands_dir, repo_root))
+    # Best-effort cleanup of empty .cursor subdirs up to the repo root. In
+    # default mode the rules leaf was already removed by rmtree above; prune
+    # from its parent (.cursor/rules) so empty ancestors are cleaned too.
+    for rel in (_SKILLS_DIR, _COMMANDS_DIR, _RULES_DIR):
+        subdir = repo_root / rel
+        if subdir.exists():
+            removed.extend(remove_empty_parent_dirs(subdir, repo_root))
+    rules_parent = repo_root / Path(_RULES_DIR).parent
+    if rules_parent.exists():
+        removed.extend(remove_empty_parent_dirs(rules_parent, repo_root))
 
     return {"removed_artifacts": removed}

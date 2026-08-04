@@ -2,6 +2,7 @@
 
 import json
 import os
+import stat
 import sys
 import tempfile
 import unittest
@@ -19,6 +20,16 @@ from illuminate.sync_codebuddy import (
 
 REPO_ROOT = Path(__file__).parent.parent
 CORE_PACK = REPO_ROOT / "packs" / "core"
+
+
+def _set_readonly(path: Path) -> None:
+    """Make a file read-only on both Windows (attribute) and POSIX (mode)."""
+    os.chmod(path, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
+
+
+def _make_writable(path: Path) -> None:
+    """Restore write permission so tempdir cleanup does not fail."""
+    os.chmod(path, stat.S_IWRITE | stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
 
 
 class TestSyncCodeBuddy(unittest.TestCase):
@@ -95,8 +106,77 @@ class TestSyncCodeBuddy(unittest.TestCase):
         result = sync_codebuddy(CORE_PACK, repo, skill_filter=["illuminate.record-knowledge"])
 
         commands_dir = repo / ".codebuddy" / "commands"
+        # The exposed skill's command exists.
         self.assertTrue((commands_dir / "record-knowledge.md").exists())
+        # Skills that are not exposed produce no command.
         self.assertFalse((commands_dir / "archive-module-doc.md").exists())
+        self.assertFalse((commands_dir / "tidy-doc.md").exists())
+        # Standalone commands are always synced, independent of skill filter.
+        for name in ("finish-task", "knowledge-status", "propose-knowledge"):
+            self.assertTrue((commands_dir / f"{name}.md").exists(),
+                            f"Standalone command {name}.md should always be synced")
+
+    def test_sync_commands_standalone_survive_minimal_filter(self):
+        """Standalone commands must be synced even under a minimal skill filter
+        that exposes none of the doc-related skills."""
+        repo = self._make_repo()
+        sync_codebuddy(CORE_PACK, repo, skill_filter=["illuminate.layer-debug"])
+
+        commands_dir = repo / ".codebuddy" / "commands"
+        self.assertFalse((commands_dir / "record-knowledge.md").exists())
+        self.assertFalse((commands_dir / "archive-module-doc.md").exists())
+        self.assertFalse((commands_dir / "tidy-doc.md").exists())
+        for name in ("finish-task", "knowledge-status", "propose-knowledge"):
+            self.assertTrue((commands_dir / f"{name}.md").exists(),
+                            f"Standalone command {name}.md should always be synced")
+
+    def test_sync_commands_all_present_without_filter(self):
+        """With no skill filter every command in the catalog is synced."""
+        repo = self._make_repo()
+        sync_codebuddy(CORE_PACK, repo)
+
+        commands_dir = repo / ".codebuddy" / "commands"
+        for name in ("record-knowledge", "archive-module-doc", "tidy-doc",
+                     "finish-task", "knowledge-status", "propose-knowledge"):
+            self.assertTrue((commands_dir / f"{name}.md").exists(),
+                            f"Command {name}.md should exist with no filter")
+
+    def test_first_sync_rejects_unmanaged_same_name_command(self):
+        """A project-owned command sharing an Illuminate command's name must
+        fail closed on first sync: nothing is written, not even the rules
+        directory that otherwise gets rebuilt first."""
+        repo = self._make_repo()
+        proj_cmd = repo / ".codebuddy" / "commands" / "record-knowledge.md"
+        proj_cmd.parent.mkdir(parents=True, exist_ok=True)
+        original = "# project-owned record-knowledge\n"
+        proj_cmd.write_text(original, encoding="utf-8")
+
+        with self.assertRaises(ValueError) as ctx:
+            sync_codebuddy(CORE_PACK, repo)
+        self.assertIn("not Illuminate-managed", str(ctx.exception))
+
+        # Fail-before-write: command intact, no rules, no skills, no
+        # CODEBUDDY.md, no lock
+        self.assertEqual(
+            proj_cmd.read_text(encoding="utf-8"), original,
+            "Existing project command must be untouched after failed sync",
+        )
+        self.assertFalse(
+            (repo / ".codebuddy" / "rules").exists(),
+            "Failed sync must not rebuild rules before the command collision",
+        )
+        self.assertFalse(
+            (repo / ".codebuddy" / "skills").exists(),
+            "Failed sync must not write skills before the command collision",
+        )
+        self.assertFalse(
+            (repo / ".codebuddy" / "CODEBUDDY.md").exists(),
+            "Failed sync must not write CODEBUDDY.md",
+        )
+        self.assertFalse(
+            (repo / ".illuminate").exists(),
+            "Failed sync must not write a lock",
+        )
 
     def test_sync_creates_lock(self):
         repo = self._make_repo()
@@ -173,7 +253,12 @@ class TestSyncCodeBuddy(unittest.TestCase):
             "Existing skill content must be untouched after failed sync",
         )
         self.assertTrue(project_skill.joinpath("project-config.json").exists())
-        # Fail-before-write: no CODEBUDDY.md, no lock, no other skill dirs
+        # Fail-before-write: no rules, no CODEBUDDY.md, no lock, no other
+        # skill dirs
+        self.assertFalse(
+            (repo / ".codebuddy" / "rules").exists(),
+            "Failed sync must not rebuild rules before the skill collision",
+        )
         self.assertFalse(
             (repo / ".codebuddy" / "CODEBUDDY.md").exists(),
             "Failed sync must not write CODEBUDDY.md",
@@ -230,6 +315,76 @@ class TestSyncCodeBuddy(unittest.TestCase):
         result = clean_sync(repo)
         content = (repo / "CODEBUDDY.md").read_text(encoding="utf-8")
         self.assertEqual(content.strip(), "# Clean")
+
+    # ── Fail-before-write on stale-deletion targets (P0) ──
+
+    def test_stale_command_readonly_fails_before_write(self):
+        repo = self._make_repo()
+        sync_codebuddy(CORE_PACK, repo, skill_filter=["illuminate.record-knowledge"])
+        stale_cmd = repo / ".codebuddy" / "commands" / "record-knowledge.md"
+        self.assertTrue(stale_cmd.exists())
+        _set_readonly(stale_cmd)
+        try:
+            with self.assertRaises(ValueError):
+                sync_codebuddy(CORE_PACK, repo, skill_filter=["illuminate.layer-debug"])
+            self.assertFalse(
+                (repo / ".codebuddy" / "skills" / "layer-debug").exists(),
+                "Fail-before-write: layer-debug must not be written when a "
+                "stale command cannot be deleted",
+            )
+        finally:
+            _make_writable(stale_cmd)
+
+    def test_stale_skill_readonly_fails_before_write(self):
+        repo = self._make_repo()
+        sync_codebuddy(CORE_PACK, repo, skill_filter=["illuminate.perf-profile"])
+        stale_file = repo / ".codebuddy" / "skills" / "perf-profile" / "SKILL.md"
+        self.assertTrue(stale_file.exists())
+        _set_readonly(stale_file)
+        try:
+            with self.assertRaises(ValueError):
+                sync_codebuddy(CORE_PACK, repo, skill_filter=["illuminate.layer-debug"])
+            self.assertFalse(
+                (repo / ".codebuddy" / "skills" / "layer-debug").exists(),
+                "Fail-before-write: layer-debug must not be written when a "
+                "stale skill cannot be deleted",
+            )
+        finally:
+            _make_writable(stale_file)
+
+    # ── Fail-before-write on existing read-only target file (P1) ──
+
+    def test_existing_codebuddy_md_readonly_fails_before_write(self):
+        repo = self._make_repo()
+        sync_codebuddy(CORE_PACK, repo, skill_filter=["illuminate.record-knowledge"])
+        cb = repo / ".codebuddy" / "CODEBUDDY.md"
+        _set_readonly(cb)
+        try:
+            with self.assertRaises(ValueError):
+                sync_codebuddy(CORE_PACK, repo, skill_filter=["illuminate.layer-debug"])
+            self.assertFalse(
+                (repo / ".codebuddy" / "skills" / "layer-debug").exists(),
+                "Fail-before-write: layer-debug must not be written when "
+                "CODEBUDDY.md is read-only",
+            )
+        finally:
+            _make_writable(cb)
+
+    # ── Clean without lock keeps rules dir (P2) ──
+
+    def test_clean_without_lock_keeps_rules_dir(self):
+        repo = self._make_repo()
+        sync_codebuddy(CORE_PACK, repo)
+        rules_dir = repo / ".codebuddy" / "rules" / "illuminate"
+        lock = repo / ".illuminate" / "codebuddy-lock.json"
+        lock.unlink()
+
+        clean_sync(repo)
+
+        self.assertTrue(
+            rules_dir.exists(),
+            "Clean without a lock must not rmtree the rules directory",
+        )
 
 
 if __name__ == "__main__":

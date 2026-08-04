@@ -84,8 +84,10 @@ Keep human-readable Markdown as the source truth and store claims, evidence, and
 | `illuminate compat check [--pack <dir>]` | Check compatibility dirs match canonical sources (files + SHA-256) |
 | `illuminate sync codex --repo <path> [--pack <dir>] [--skill <id>...]` | Sync pack into target repo for Codex App |
 | `illuminate sync codebuddy --repo <path> [--pack <dir>] [--skill <id>...]` | Sync pack into target repo for CodeBuddy |
-| `illuminate sync check --repo <path> [--harness codex\|codebuddy]` | Verify sync integrity |
-| `illuminate sync clean --repo <path> [--harness codex\|codebuddy]` | Remove Illuminate-synced artifacts |
+| `illuminate sync cursor --repo <path> [--pack <dir>] [--skill <id>...] [--agents-compat]` | Sync pack into target repo for Cursor |
+| `illuminate sync check --repo <path> [--pack <dir>] [--harness codex\|codebuddy\|cursor]` | Verify sync integrity |
+| `illuminate sync clean --repo <path> [--harness codex\|codebuddy\|cursor]` | Remove Illuminate-synced artifacts |
+| `illuminate sync doctor --repo <path> --harness cursor` | Read-only Cursor sync diagnostics (exit 0 = healthy, 1 = issues) |
 | `illuminate knowledge pull --repo <path> [--store <dir>] [--manifest <json>]` | Pull configured project knowledge to central store |
 | `illuminate knowledge status --repo <path> [--store <dir>] [--manifest <json>]` | Compare configured project knowledge with central store |
 | `illuminate knowledge push --repo <path> [--store <dir>] [--manifest <json>] [--force]` | Push store documents back to project safely |
@@ -159,7 +161,7 @@ illuminate sync codebuddy --pack packs/core --repo /path/to/project
 Generates:
 - `.codebuddy/rules/illuminate/` — Policy files (priority-ordered)
 - `.codebuddy/skills/` — Selected skills (does not delete project-owned skills)
-- `.codebuddy/commands/` — Shortcuts: `/record-knowledge`, `/archive-module-doc`, `/tidy-doc`
+- `.codebuddy/commands/` — Shortcuts: `/record-knowledge`, `/archive-module-doc`, `/tidy-doc` (skill-bound, synced when the skill is exposed), and `/finish-task`, `/knowledge-status`, `/propose-knowledge` (standalone, always synced)
 - `.codebuddy/CODEBUDDY.md` — Managed block (replaces only `<!-- illuminate:begin/end -->`)
 
 Sync, verify, and clean:
@@ -171,6 +173,33 @@ illuminate sync clean --repo /path/to/project --harness codebuddy
 ```
 
 Does NOT modify project-owned `.codebuddy` content. See `sync_codebuddy.py` for details.
+
+## Cursor Integration
+
+Sync Illuminate Pack into a project for Cursor:
+
+```bash
+illuminate sync cursor --pack packs/core --repo /path/to/project
+```
+
+Generates (default mode):
+- `.cursor/rules/illuminate/core.mdc` — Policy files and Synchronized skills list
+- `.cursor/skills/` — Selected skills (does not delete project-owned skills)
+- `.cursor/commands/` — Shortcuts (beta): `/record-knowledge`, `/archive-module-doc`, `/tidy-doc` (skill-bound, synced when the skill is exposed), and `/finish-task`, `/knowledge-status`, `/propose-knowledge` (standalone, always synced)
+- `.illuminate/cursor-lock.json` — Sync manifest with hashes (pack, skills, commands, `rules_md_hash`)
+
+Cursor does NOT modify the root `AGENTS.md` by default. Pass `--agents-compat` to keep the legacy behavior of merging an Illuminate managed block into the root `AGENTS.md` (shared with the Codex CLI); the lock records the `agents_compat` flag and uses `agents_md_hash` accordingly, and `check`/`clean` follow the same path.
+
+Sync, verify, diagnose, and clean:
+
+```bash
+illuminate sync cursor --repo /path/to/project --skill illuminate.record-knowledge
+illuminate sync check --repo /path/to/project --harness cursor
+illuminate sync doctor --repo /path/to/project --harness cursor
+illuminate sync clean --repo /path/to/project --harness cursor
+```
+
+`sync doctor` is read-only Cursor diagnostics: exit code 0 means healthy, 1 means issues were found (cursor harness only). Does NOT modify project-owned `.cursor` content, and does not generate `.cursor/cli.json` or `.agents/skills`. Skills are copied verbatim — SKILL.md bodies are not rewritten for Cursor. See `sync_cursor.py` for details.
 
 ## Knowledge Store
 
@@ -199,13 +228,21 @@ Pull keeps the previous three-way baseline for conflicts and deletions. Push ref
 
 Knowledge Promotion Bridge is a thin bridge between the Store (backup tool) and the Harness Pack (Git-versioned, reviewed general knowledge). The Store still only handles backup/diff/conflict/restore; it does not perform cross-project generalization or publishing.
 
-Promotion state follows `raw → reviewed → promoted`, with `raw`/`reviewed → rejected` and `promoted → superseded`; generalized content has no separate state and is supplied via `--content` at promote time. The registry lives at `<store>/projects/<project-id>/promotions.json` (beside `knowledge-lock.json`), with generalized content stored under `promotions/<id>.md`.
+Promotion state follows `raw → reviewed → promoted`, with `raw`/`reviewed → rejected` and `promoted → superseded`. The registry lives at `<store>/projects/<project-id>/promotions.json` (beside `knowledge-lock.json`), with content snapshots stored under `promotions/<id>/source.md` (creation) and `promotions/<id>/draft.md` (generalized promote).
 
 The four commands:
-- `candidate` captures a source document with provenance (git remote, commit, docs-relative path, anchor).
-- `review` marks a candidate `reviewed`.
-- `promote` writes content into a Harness Pack (`<pack>/policies|skills|references|evidence/`), records the pack.json version and the written path; refuses to overwrite an existing pack file unless `--force`; `--dry-run` writes nothing.
+- `candidate` captures a source document with provenance (git remote, commit, docs-relative path, anchor) and snapshots its exact bytes to `promotions/<id>/source.md` (`source_sha256`).
+- `review` marks a candidate `reviewed` and pins `reviewed_sha256` to the hash of the exact bytes under review (the source snapshot). This is a content-level review binding: it locks what was actually reviewed.
+- `promote` writes content into a Harness Pack (`<pack>/policies|skills|references|evidence/`) and registers it in the pack manifest. It is guarded by `reviewed_sha256`: the bytes to be written must hash to the value recorded at review, otherwise promotion is rejected ("refusing to promote unreviewed bytes"). `--content` (generalize) supplies the bytes from a file, but because the reviewed bytes are pinned to the source snapshot, a valid draft must still match that snapshot byte-for-byte — truly generalizing a different draft requires a later draft-review flow that is not currently supported.
 - `reject` marks a `raw`/`reviewed` candidate `rejected`; with `--superseded` it marks a `promoted` candidate `superseded`.
+
+Manifest registration per target:
+- `reference` — appended to `pack.json.references`.
+- `policy` — appended to `policies/index.json` (priority 0, lowest).
+- `skill` — writes `skills/<name>/SKILL.md` + a minimal `contract.json` and registers in `pack.json.skills`.
+- `evidence` — sets `pack.json.evidence.config`.
+
+After writing, `promote` runs `validate_pack`; if validation fails the whole change (files + manifest + index) is rolled back. `--target-path` is narrowed to the target's directory (`references/`, `policies/`, `skills/`, `evidence/`) and cannot target governance/index files (`pack.json`, `*.schema.json`, `index.json`) even with `--force`. An existing pack file is only overwritten with `--force`; `--dry-run` writes nothing.
 
 Promotion does not stage or commit. `promote` only writes into the Pack working tree; commits and PRs are left to Git and humans.
 

@@ -12,9 +12,10 @@ Commands:
     illuminate compat check [--pack <dir>]
     illuminate sync codex --repo <path> [--pack <dir>] [--skill <id>...]
     illuminate sync codebuddy --repo <path> [--pack <dir>] [--skill <id>...]
-    illuminate sync cursor --repo <path> [--pack <dir>] [--skill <id>...]
+    illuminate sync cursor --repo <path> [--pack <dir>] [--skill <id>...] [--agents-compat]
     illuminate sync check --repo <path> [--pack <dir>]
     illuminate sync clean --repo <path>
+    illuminate sync doctor --repo <path> --harness cursor
     illuminate knowledge pull --repo <path> [--store <dir>] [--manifest <json>]
     illuminate knowledge status --repo <path> [--store <dir>] [--manifest <json>]
     illuminate knowledge push --repo <path> [--store <dir>] [--manifest <json>] [--force]
@@ -42,7 +43,12 @@ from .lockfile import load_lock, verify_lock
 from .compat import compat_generate, compat_check
 from .sync_codex import sync_codex, check_sync as check_codex_sync, clean_sync as clean_codex_sync
 from .sync_codebuddy import sync_codebuddy, check_sync as check_codebuddy_sync, clean_sync as clean_codebuddy_sync
-from .sync_cursor import sync_cursor, check_sync as check_cursor_sync, clean_sync as clean_cursor_sync
+from .sync_cursor import (
+    sync_cursor,
+    check_sync as check_cursor_sync,
+    clean_sync as clean_cursor_sync,
+    doctor_sync as doctor_cursor_sync,
+)
 from .knowledge_store import knowledge_pull, knowledge_status, knowledge_push
 from .promotion import (
     PromotionError,
@@ -143,13 +149,16 @@ def _build_parser():
     scb.add_argument("--skill", action="append", default=None,
                      help="Skill ID to sync (repeatable; default: all non-alias)")
 
-    scu = ps.add_parser("cursor", help="Synchronize for Cursor (AGENTS.md + .cursor/skills + commands)")
+    scu = ps.add_parser("cursor", help="Synchronize for Cursor (.cursor/rules + .cursor/skills + commands)")
     scu.add_argument("--pack", default="packs/core", help="Pack directory path")
     scu.add_argument("--repo", required=True, help="Target repository path")
     scu.add_argument("--skill", action="append", default=None,
                      help="Skill ID to sync (repeatable; default: all non-alias)")
+    scu.add_argument("--agents-compat", action="store_true",
+                     help="Merge into the root AGENTS.md instead of writing "
+                          ".cursor/rules/illuminate/core.mdc (for projects sharing AGENTS.md with Codex)")
 
-    sch = ps.add_parser("check", help="Verify sync integrity for Codex or CodeBuddy")
+    sch = ps.add_parser("check", help="Verify sync integrity for Codex, CodeBuddy, or Cursor")
     sch.add_argument("--pack", default="packs/core", help="Pack directory path")
     sch.add_argument("--repo", required=True, help="Target repository path")
     sch.add_argument("--harness", choices=["codex", "codebuddy", "cursor"], default="codex",
@@ -159,6 +168,11 @@ def _build_parser():
     scl.add_argument("--repo", required=True, help="Target repository path")
     scl.add_argument("--harness", choices=["codex", "codebuddy", "cursor"], default="codex",
                      help="Harness to clean (default: codex)")
+
+    sdo = ps.add_parser("doctor", help="Read-only diagnostic of a repository sync state")
+    sdo.add_argument("--repo", required=True, help="Target repository path")
+    sdo.add_argument("--harness", choices=["cursor"], default="cursor",
+                     help="Harness to diagnose (only 'cursor' is currently supported)")
 
     # knowledge pull / status / push
     p = sub.add_parser("knowledge", help="Knowledge store operations")
@@ -530,17 +544,20 @@ def _cmd_sync_cursor(args):
         return 1
 
     try:
-        result = sync_cursor(pack_dir, repo, skill_filter=args.skill)
+        result = sync_cursor(
+            pack_dir, repo, skill_filter=args.skill, agents_compat=args.agents_compat
+        )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
+    mode = "AGENTS.md" if result["agents_compat"] else ".cursor/rules/illuminate/core.mdc"
     print(f"Cursor sync: COMPLETE", file=sys.stderr)
     print(f"  Pack:     {result['pack_id']} v{result['pack_version']}", file=sys.stderr)
     print(f"  Skills:   {', '.join(result['exposed_skills'])}", file=sys.stderr)
     print(f"  Skills:   {result['skills_copied']} synced", file=sys.stderr)
     print(f"  Commands: {result['commands_copied']} synced", file=sys.stderr)
-    print(f"  AGENTS:   {'modified' if result['agents_modified'] else 'no change'}", file=sys.stderr)
+    print(f"  Rules:    {mode} {'written' if result['rules_modified'] else 'no change'}", file=sys.stderr)
     return 0
 
 
@@ -598,6 +615,58 @@ def _cmd_sync_clean(args):
     else:
         print(f"Clean ({label}): nothing to remove", file=sys.stderr)
     return 0
+
+
+def _cmd_sync_doctor(args):
+    repo = Path(args.repo).resolve()
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+
+    report = doctor_cursor_sync(repo)
+
+    print(f"Cursor sync doctor: {repo}", file=sys.stderr)
+    print(f"  Lock present:  {report['lock_exists']}", file=sys.stderr)
+    if report["lock_errors"]:
+        for err in report["lock_errors"]:
+            print(f"  Lock error:    {err}", file=sys.stderr)
+    if report["mode"]:
+        print(f"  Mode:          {report['mode']}", file=sys.stderr)
+    if report["rules"] is not None:
+        r = report["rules"]
+        print(f"  Rules file:    {r['path']}", file=sys.stderr)
+        print(f"    exists:      {r['exists']}", file=sys.stderr)
+        if r["exists"]:
+            print(f"    hash match:  {r['hash_matches']}", file=sys.stderr)
+    if report["skills"]["missing"] or report["skills"]["hash_mismatch"]:
+        for p in report["skills"]["missing"]:
+            print(f"  Missing skill: {p}", file=sys.stderr)
+        for p in report["skills"]["hash_mismatch"]:
+            print(f"  Skill mismatch:{p}", file=sys.stderr)
+    if report["commands"]["missing"] or report["commands"]["hash_mismatch"]:
+        for p in report["commands"]["missing"]:
+            print(f"  Missing cmd:   {p}", file=sys.stderr)
+        for p in report["commands"]["hash_mismatch"]:
+            print(f"  Cmd mismatch:  {p}", file=sys.stderr)
+    for p in report["stale"]:
+        print(f"  Stale:         {p}", file=sys.stderr)
+
+    healthy = (
+        report["lock_exists"]
+        and not report["lock_errors"]
+        and report["rules"] is not None
+        and report["rules"]["exists"]
+        and report["rules"]["hash_matches"]
+        and not report["skills"]["missing"]
+        and not report["skills"]["hash_mismatch"]
+        and not report["commands"]["missing"]
+        and not report["commands"]["hash_mismatch"]
+    )
+    if healthy:
+        print(f"Cursor sync doctor: HEALTHY", file=sys.stderr)
+        return 0
+    print(f"Cursor sync doctor: PROBLEMS DETECTED", file=sys.stderr)
+    return 1
 
 
 def _cmd_knowledge_pull(args):
@@ -885,6 +954,7 @@ _DISPATCH = {
     ("sync", "cursor"): _cmd_sync_cursor,
     ("sync", "check"): _cmd_sync_check,
     ("sync", "clean"): _cmd_sync_clean,
+    ("sync", "doctor"): _cmd_sync_doctor,
     ("knowledge", "pull"): _cmd_knowledge_pull,
     ("knowledge", "status"): _cmd_knowledge_status,
     ("knowledge", "push"): _cmd_knowledge_push,

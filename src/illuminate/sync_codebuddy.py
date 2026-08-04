@@ -30,6 +30,10 @@ from .manifest import load_policy_index
 from .resolve import resolve_pack
 from .sync_shared import (
     check_managed_file_hashes,
+    ensure_writable,
+    preflight_managed_command_tree,
+    preflight_managed_skill_tree,
+    sync_managed_command_tree,
     sync_managed_skill_tree,
 )
 from .validate import validate_pack
@@ -49,8 +53,20 @@ _LOCK_DIR = ".illuminate"
 # Rules sync
 # ---------------------------------------------------------------------------
 
+def _preflight_target_paths(repo_root: Path) -> None:
+    """Verify every target Illuminate will create/write under repo_root is
+    writable (or creatable), including an already-existing target file itself
+    (not just its parent directory). Fails closed before any write."""
+    for rel in (_RULES_DIR, _SKILLS_DIR, _COMMANDS_DIR, ".codebuddy/CODEBUDDY.md", _LOCK_DIR):
+        ensure_writable(repo_root / rel)
+
+
 def _sync_rules(pack_dir: Path, repo_root: Path, manifest: dict) -> Dict[str, str]:
     """Sync policies into .codebuddy/rules/illuminate/ as priority-ordered files.
+
+    The rules directory is namespace-reserved for Illuminate and is rebuilt in
+    full; callers must run preflight before this so the wipe cannot destroy
+    project content when a later artifact would fail.
 
     Returns {filename: sha256} for all synced rule files.
     """
@@ -90,15 +106,12 @@ def _sync_skills(
     repo_root: Path,
     manifest: dict,
     exposed: Set[str],
+    managed_skills: Set[str],
 ) -> Dict[str, Dict[str, str]]:
     """Sync selected skills into .codebuddy/skills/.
 
     Returns {skill_name: {file_rel: sha256}} for all synced skill files.
     """
-    # Load existing lock to know which skills Illuminate manages
-    lock = _load_lock(repo_root)
-    managed_skills = {e["name"] for e in lock.get("skills", [])}
-
     return sync_managed_skill_tree(
         pack_dir,
         repo_root / _SKILLS_DIR,
@@ -112,28 +125,40 @@ def _sync_skills(
 # Commands sync
 # ---------------------------------------------------------------------------
 
+def _desired_commands(exposed: Set[str]) -> Dict[str, str]:
+    """Map command filenames to content.
+
+    Standalone commands (``skill_id is None``) are always included; commands
+    bound to a skill are included only when that skill is exposed. The explicit
+    ``None`` check is required because ``spec.skill_id in exposed`` would raise
+    TypeError for ``None``.
+    """
+    return {
+        f"{name}.md": spec.prompt
+        for name, spec in build_command_catalog().items()
+        if spec.skill_id is None or spec.skill_id in exposed
+    }
+
+
 def _sync_commands(
     repo_root: Path,
     exposed: Set[str],
+    previous_commands: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
     """Sync command shortcuts for doc-related skills.
 
-    Only syncs commands whose associated skill is exposed.
+    Only syncs commands whose associated skill is exposed. Uses the shared
+    command syncer: only files recorded as previously managed are replaced or
+    removed, so a project-owned command sharing a name fails closed instead of
+    being overwritten.
 
     Returns {filename: sha256}.
     """
-    commands_dir = repo_root / _COMMANDS_DIR
-    commands_dir.mkdir(parents=True, exist_ok=True)
-
-    hashes: Dict[str, str] = {}
-    for cmd_name, spec in build_command_catalog().items():
-        if spec.skill_id not in exposed:
-            continue
-        cmd_path = commands_dir / f"{cmd_name}.md"
-        cmd_path.write_text(spec.prompt, encoding="utf-8")
-        hashes[f"{cmd_name}.md"] = hash_file(cmd_path)
-
-    return hashes
+    return sync_managed_command_tree(
+        repo_root / _COMMANDS_DIR,
+        _desired_commands(exposed),
+        previous_commands or {},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -263,11 +288,15 @@ def sync_codebuddy(
     Steps:
       1. Validate pack.
       2. Resolve exposed skills (filter + alias + conflict check).
-      3. Sync .codebuddy/rules/illuminate/ (priority-ordered policy files).
-      4. Sync .codebuddy/skills/ (selected skills, managed via lock ownership).
-      5. Sync .codebuddy/commands/ (record-knowledge / archive-module-doc / tidy-doc).
-      6. Merge CODEBUDDY.md managed block.
-      7. Write .illuminate/codebuddy-lock.json.
+      3. Phase 1 preflight: run every collision / writability check (skills,
+         commands, rules, CODEBUDDY.md, lock) before writing anything. The
+         rules directory is rebuilt via rmtree, so it must not run until every
+         other artifact has passed.
+      4. Phase 2 write: rebuild .codebuddy/rules/illuminate/, sync
+         .codebuddy/skills/ and .codebuddy/commands/, merge CODEBUDDY.md,
+         write .illuminate/codebuddy-lock.json.
+
+    Any preflight failure raises ValueError with no file written.
 
     Returns a summary dict.
     """
@@ -284,16 +313,30 @@ def sync_codebuddy(
     manifest = resolved["manifest"]
     exposed = set(resolved["skills"]["exposed"])
 
-    # 3. Sync rules
+    lock = _load_lock(repo_root)
+    managed_skills = {e["name"] for e in lock.get("skills", [])}
+    previous_commands = lock.get("commands")
+
+    # 3. Phase 1 — preflight: run every collision / writability check before
+    #    touching the repo. In particular the rules directory is rebuilt via
+    #    rmtree, so it must not run until every other artifact has passed.
+    preflight_managed_skill_tree(
+        repo_root / _SKILLS_DIR, manifest, exposed, managed_skills
+    )
+    desired_commands = _desired_commands(exposed)
+    preflight_managed_command_tree(
+        repo_root / _COMMANDS_DIR, desired_commands, previous_commands or {}
+    )
+    _preflight_target_paths(repo_root)
+
+    # 4. Phase 2 — write.
     rule_hashes = _sync_rules(pack_dir, repo_root, manifest)
+    skill_hashes = _sync_skills(
+        pack_dir, repo_root, manifest, exposed, managed_skills
+    )
+    command_hashes = _sync_commands(repo_root, exposed, previous_commands)
 
-    # 4. Sync skills
-    skill_hashes = _sync_skills(pack_dir, repo_root, manifest, exposed)
-
-    # 5. Sync commands
-    command_hashes = _sync_commands(repo_root, exposed)
-
-    # 6. Merge CODEBUDDY.md
+    # Merge CODEBUDDY.md
     codebuddy_path = repo_root / ".codebuddy" / "CODEBUDDY.md"
     codebuddy_path.parent.mkdir(parents=True, exist_ok=True)
     block_text = _build_codebuddy_block(manifest, exposed)
@@ -301,8 +344,8 @@ def sync_codebuddy(
     codebuddy_path.write_text(new_content, encoding="utf-8")
     codebuddy_hash = hash_file(codebuddy_path)
 
-    # 7. Write lock
-    lock = _write_lock(
+    # Write lock
+    _write_lock(
         pack_dir, repo_root, manifest, exposed,
         rule_hashes, skill_hashes, command_hashes,
         codebuddy_hash,
@@ -386,6 +429,9 @@ def clean_sync(repo_root: Path) -> dict:
       - .codebuddy/CODEBUDDY.md illuminate block
       - .illuminate/codebuddy-lock.json
 
+    Without a lock, clean cannot know what is managed: the rules directory is
+    left untouched along with skills/commands.
+
     Does NOT remove project-owned .codebuddy content.
     """
     repo_root = Path(repo_root).resolve()
@@ -393,12 +439,14 @@ def clean_sync(repo_root: Path) -> dict:
 
     # Load lock to know managed items
     lock = _load_lock(repo_root)
+    has_lock = (repo_root / _LOCK_DIR / "codebuddy-lock.json").exists()
 
-    # Remove managed rules directory
-    rules_dir = repo_root / _RULES_DIR
-    if rules_dir.exists():
-        shutil.rmtree(rules_dir)
-        removed.append(str(_RULES_DIR))
+    # Remove managed rules directory (only when a lock tells us it is managed)
+    if has_lock:
+        rules_dir = repo_root / _RULES_DIR
+        if rules_dir.exists():
+            shutil.rmtree(rules_dir)
+            removed.append(str(_RULES_DIR))
 
     # Remove managed skills (only those in lock)
     for skill_entry in lock.get("skills", []):
