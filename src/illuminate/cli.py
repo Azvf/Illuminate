@@ -12,6 +12,7 @@ Commands:
     illuminate compat check [--pack <dir>]
     illuminate sync codex --repo <path> [--pack <dir>] [--skill <id>...]
     illuminate sync codebuddy --repo <path> [--pack <dir>] [--skill <id>...]
+    illuminate sync cursor --repo <path> [--pack <dir>] [--skill <id>...]
     illuminate sync check --repo <path> [--pack <dir>]
     illuminate sync clean --repo <path>
     illuminate knowledge pull --repo <path> [--store <dir>] [--manifest <json>]
@@ -41,6 +42,7 @@ from .lockfile import load_lock, verify_lock
 from .compat import compat_generate, compat_check
 from .sync_codex import sync_codex, check_sync as check_codex_sync, clean_sync as clean_codex_sync
 from .sync_codebuddy import sync_codebuddy, check_sync as check_codebuddy_sync, clean_sync as clean_codebuddy_sync
+from .sync_cursor import sync_cursor, check_sync as check_cursor_sync, clean_sync as clean_cursor_sync
 from .knowledge_store import knowledge_pull, knowledge_status, knowledge_push
 from .promotion import (
     PromotionError,
@@ -141,16 +143,21 @@ def _build_parser():
     scb.add_argument("--skill", action="append", default=None,
                      help="Skill ID to sync (repeatable; default: all non-alias)")
 
+    scu = ps.add_parser("cursor", help="Synchronize for Cursor (AGENTS.md + .cursor/skills + commands)")
+    scu.add_argument("--pack", default="packs/core", help="Pack directory path")
+    scu.add_argument("--repo", required=True, help="Target repository path")
+    scu.add_argument("--skill", action="append", default=None,
+                     help="Skill ID to sync (repeatable; default: all non-alias)")
 
     sch = ps.add_parser("check", help="Verify sync integrity for Codex or CodeBuddy")
     sch.add_argument("--pack", default="packs/core", help="Pack directory path")
     sch.add_argument("--repo", required=True, help="Target repository path")
-    sch.add_argument("--harness", choices=["codex", "codebuddy"], default="codex",
+    sch.add_argument("--harness", choices=["codex", "codebuddy", "cursor"], default="codex",
                      help="Harness to check (default: codex)")
 
     scl = ps.add_parser("clean", help="Remove all Illuminate-synced artifacts from a repository")
     scl.add_argument("--repo", required=True, help="Target repository path")
-    scl.add_argument("--harness", choices=["codex", "codebuddy"], default="codex",
+    scl.add_argument("--harness", choices=["codex", "codebuddy", "cursor"], default="codex",
                      help="Harness to clean (default: codex)")
 
     # knowledge pull / status / push
@@ -511,6 +518,31 @@ def _cmd_sync_codebuddy(args):
     return 0
 
 
+def _cmd_sync_cursor(args):
+    pack_dir = Path(args.pack).resolve()
+    repo = Path(args.repo).resolve()
+
+    if not pack_dir.exists():
+        print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
+        return 1
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+
+    try:
+        result = sync_cursor(pack_dir, repo, skill_filter=args.skill)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Cursor sync: COMPLETE", file=sys.stderr)
+    print(f"  Pack:     {result['pack_id']} v{result['pack_version']}", file=sys.stderr)
+    print(f"  Skills:   {', '.join(result['exposed_skills'])}", file=sys.stderr)
+    print(f"  Skills:   {result['skills_copied']} synced", file=sys.stderr)
+    print(f"  Commands: {result['commands_copied']} synced", file=sys.stderr)
+    print(f"  AGENTS:   {'modified' if result['agents_modified'] else 'no change'}", file=sys.stderr)
+    return 0
+
 
 def _cmd_sync_check(args):
     pack_dir = Path(args.pack).resolve()
@@ -526,6 +558,9 @@ def _cmd_sync_check(args):
     if getattr(args, 'harness', 'codex') == 'codebuddy':
         ok, issues = check_codebuddy_sync(pack_dir, repo)
         label = "CodeBuddy"
+    elif getattr(args, 'harness', 'codex') == 'cursor':
+        ok, issues = check_cursor_sync(pack_dir, repo)
+        label = "Cursor"
     else:
         ok, issues = check_codex_sync(pack_dir, repo)
         label = "Codex"
@@ -548,6 +583,9 @@ def _cmd_sync_clean(args):
     if getattr(args, 'harness', 'codex') == 'codebuddy':
         result = clean_codebuddy_sync(repo)
         label = "CodeBuddy"
+    elif getattr(args, 'harness', 'codex') == 'cursor':
+        result = clean_cursor_sync(repo)
+        label = "Cursor"
     else:
         result = clean_codex_sync(repo)
         label = "Codex"
@@ -844,6 +882,7 @@ _DISPATCH = {
     ("compat", "check"): _cmd_compat_check,
     ("sync", "codex"): _cmd_sync_codex,
     ("sync", "codebuddy"): _cmd_sync_codebuddy,
+    ("sync", "cursor"): _cmd_sync_cursor,
     ("sync", "check"): _cmd_sync_check,
     ("sync", "clean"): _cmd_sync_clean,
     ("knowledge", "pull"): _cmd_knowledge_pull,

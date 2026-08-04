@@ -14,7 +14,7 @@ import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .hashutil import hash_file, hash_directory, lock_hash
 from .lockfile import build_lock_envelope
@@ -25,8 +25,13 @@ from .managed_block import (
     merge_block,
     remove_block,
 )
+from .command_catalog import build_command_catalog
 from .manifest import load_policy_index
 from .resolve import resolve_pack
+from .sync_shared import (
+    check_managed_file_hashes,
+    sync_managed_skill_tree,
+)
 from .validate import validate_pack
 
 
@@ -90,61 +95,17 @@ def _sync_skills(
 
     Returns {skill_name: {file_rel: sha256}} for all synced skill files.
     """
-    skills_dir = repo_root / _SKILLS_DIR
-
     # Load existing lock to know which skills Illuminate manages
     lock = _load_lock(repo_root)
     managed_skills = {e["name"] for e in lock.get("skills", [])}
 
-    # Pre-flight collision check: fail closed before touching the repo, so a
-    # project-owned directory that shares a skill's name is never overwritten.
-    for entry in manifest.get("skills", []):
-        if entry["id"] not in exposed:
-            continue
-        skill_name = entry["dir"].split("/")[-1]
-        dest_dir = skills_dir / skill_name
-        if dest_dir.exists() and skill_name not in managed_skills:
-            raise ValueError(
-                f"Cannot sync skill '{skill_name}': "
-                "destination already exists and is not Illuminate-managed"
-            )
-
-    skills_dir.mkdir(parents=True, exist_ok=True)
-    synced: Dict[str, Dict[str, str]] = {}
-
-    for entry in manifest.get("skills", []):
-        if entry["id"] not in exposed:
-            continue
-        skill_dir = pack_dir / entry["dir"]
-        if not skill_dir.exists():
-            continue
-        skill_name = entry["dir"].split("/")[-1]
-        dest_dir = skills_dir / skill_name
-
-        # Clean only if this skill was previously managed (to handle content removal)
-        if skill_name in managed_skills and dest_dir.exists():
-            shutil.rmtree(dest_dir)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-
-        file_hashes: Dict[str, str] = {}
-        for f in sorted(skill_dir.rglob("*")):
-            if not f.is_file():
-                continue
-            rel = f.relative_to(skill_dir)
-            dest = dest_dir / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(f, dest)
-            file_hashes[rel.as_posix()] = hash_file(dest)
-
-        synced[skill_name] = file_hashes
-
-    # Remove stale skills (those in lock but no longer exposed)
-    for skill_name in managed_skills:
-        skill_path = skills_dir / skill_name
-        if skill_path.exists() and skill_name not in synced:
-            shutil.rmtree(skill_path)
-
-    return synced
+    return sync_managed_skill_tree(
+        pack_dir,
+        repo_root / _SKILLS_DIR,
+        manifest,
+        exposed,
+        managed_skills,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -154,83 +115,22 @@ def _sync_skills(
 def _sync_commands(
     repo_root: Path,
     exposed: Set[str],
-    manifest: dict,
-    contracts: list,
 ) -> Dict[str, str]:
     """Sync command shortcuts for doc-related skills.
 
-    Currently generates commands for:
-      - record-knowledge
-      - archive-module-doc
-      - tidy-doc
+    Only syncs commands whose associated skill is exposed.
 
     Returns {filename: sha256}.
     """
-    contracts_by_id = {c["id"]: c for c in contracts}
-
-    commands: Dict[str, dict] = {
-        "record-knowledge": {
-            "name": "record-knowledge",
-            "skill_id": "illuminate.record-knowledge",
-            "prompt": (
-                "使用 `record-knowledge` Skill。\n\n"
-                "只记录本次开发中已经验证、未来可复用的最小事实。\n\n"
-                "归档规则：\n\n"
-                "- 组件/API 细节进入 `docs/20-components/`\n"
-                "- 单模块职责和功能链路进入 `docs/30-modules/`\n"
-                "- 跨模块流程进入 `docs/40-journeys/`\n"
-                "- 身份和验证数据进入 `docs/70-metadata/`\n"
-                "- 优先读取 Manifest.document，再更新已有 owner\n"
-                "- 不扫描整个项目\n"
-                "- 不补齐未经验证的内容\n"
-                "- 不顺便整理无关文档\n\n"
-                "用户补充要求：\n\n$ARGUMENTS"
-            ),
-        },
-        "archive-module-doc": {
-            "name": "archive-module-doc",
-            "skill_id": "illuminate.archive-module-doc",
-            "prompt": (
-                "使用 `archive-module-doc` Skill。\n\n"
-                "将单一模块已经存在且经过验证的知识，整理为 `docs/30-modules/<module>.md`。\n\n"
-                "规则：\n\n"
-                "- 只处理一个模块\n"
-                "- 选择 Compact / Standard / Extended 模式\n"
-                "- 先给出归档计划\n"
-                "- 只归档已验证事实\n"
-                "- 不为补齐模板而猜测\n\n"
-                "用户指定模块：\n\n$ARGUMENTS"
-            ),
-        },
-        "tidy-doc": {
-            "name": "tidy-doc",
-            "skill_id": "illuminate.tidy-doc",
-            "prompt": (
-                "使用 `tidy-doc` Skill。\n\n"
-                "跨模块、跨目录治理重复、过期、索引和 owner 问题。\n\n"
-                "规则：\n\n"
-                "- 不创建全量新文档\n"
-                "- 不引入新事实\n"
-                "- 同一事实只保留一个 owner\n"
-                "- Guidelines 不重复 Framework 语义\n"
-                "- 删除重复和过期内容\n"
-                "- 修复失效路径和索引\n\n"
-                "用户指定范围：\n\n$ARGUMENTS"
-            ),
-        },
-    }
-
-    # Only sync commands for skills that are exposed
     commands_dir = repo_root / _COMMANDS_DIR
     commands_dir.mkdir(parents=True, exist_ok=True)
 
     hashes: Dict[str, str] = {}
-    for cmd_name, cmd_info in commands.items():
-        skill_id = cmd_info["skill_id"]
-        if skill_id not in exposed:
+    for cmd_name, spec in build_command_catalog().items():
+        if spec.skill_id not in exposed:
             continue
         cmd_path = commands_dir / f"{cmd_name}.md"
-        cmd_path.write_text(cmd_info["prompt"], encoding="utf-8")
+        cmd_path.write_text(spec.prompt, encoding="utf-8")
         hashes[f"{cmd_name}.md"] = hash_file(cmd_path)
 
     return hashes
@@ -382,7 +282,6 @@ def sync_codebuddy(
     # 2. Resolve pack through the single shared resolution entry
     resolved = resolve_pack(pack_dir, str(repo_root), skill_filter)
     manifest = resolved["manifest"]
-    contracts = resolved["contracts"]
     exposed = set(resolved["skills"]["exposed"])
 
     # 3. Sync rules
@@ -392,7 +291,7 @@ def sync_codebuddy(
     skill_hashes = _sync_skills(pack_dir, repo_root, manifest, exposed)
 
     # 5. Sync commands
-    command_hashes = _sync_commands(repo_root, exposed, manifest, contracts)
+    command_hashes = _sync_commands(repo_root, exposed)
 
     # 6. Merge CODEBUDDY.md
     codebuddy_path = repo_root / ".codebuddy" / "CODEBUDDY.md"
@@ -447,16 +346,9 @@ def check_sync(pack_dir: Path, repo_root: Path) -> Tuple[bool, List[str]]:
                 issues.append(f"Rule hash mismatch: {_RULES_DIR}/{filename}")
 
     # Check skills
-    for skill_entry in lock.get("skills", []):
-        skill_name = skill_entry["name"]
-        for rel, expected_hash in skill_entry.get("files", {}).items():
-            fpath = repo_root / _SKILLS_DIR / skill_name / rel
-            if not fpath.exists():
-                issues.append(f"Missing skill file: {_SKILLS_DIR}/{skill_name}/{rel}")
-            else:
-                actual = hash_file(fpath)
-                if actual != expected_hash:
-                    issues.append(f"Skill hash mismatch: {_SKILLS_DIR}/{skill_name}/{rel}")
+    check_managed_file_hashes(
+        repo_root, _SKILLS_DIR, lock.get("skills", []), issues
+    )
 
     # Check commands
     for filename, expected_hash in lock.get("commands", {}).items():

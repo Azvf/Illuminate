@@ -25,6 +25,7 @@ from illuminate.materialize_claude import materialize_session
 from illuminate.resolve import create_mount_plan, resolve_pack
 from illuminate.sync_codex import sync_codex
 from illuminate.sync_codebuddy import sync_codebuddy
+from illuminate.sync_cursor import sync_cursor
 
 REPO_ROOT = Path(__file__).parent.parent
 CORE_PACK = REPO_ROOT / "packs" / "core"
@@ -47,10 +48,17 @@ def _exposed_via_codebuddy_sync(skill_filter):
         return sorted(result["exposed_skills"])
 
 
+def _exposed_via_cursor_sync(skill_filter):
+    with tempfile.TemporaryDirectory() as tmp:
+        result = sync_cursor(CORE_PACK, Path(tmp), skill_filter=skill_filter)
+        return sorted(result["exposed_skills"])
+
+
 ADAPTERS = (
     _exposed_via_mount,
     _exposed_via_codex_sync,
     _exposed_via_codebuddy_sync,
+    _exposed_via_cursor_sync,
 )
 
 
@@ -138,6 +146,12 @@ class TestAdapterConsistency(unittest.TestCase):
         for adapter in ADAPTERS:
             with self.assertRaises(ValueError):
                 adapter(["illuminate.nonexistent"])
+
+    def test_empty_filter_raises_everywhere(self):
+        """An empty (not None) filter is invalid on every adapter."""
+        for adapter in ADAPTERS:
+            with self.assertRaises(ValueError):
+                adapter([])
 
 
 class TestLogicalGoldenModel(unittest.TestCase):
