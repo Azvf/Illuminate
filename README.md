@@ -1,6 +1,12 @@
 # Illuminate
 
-Git-versioned Harness Knowledge Pack + executable mount CLI for Claude Code.
+Git-versioned engineering knowledge pack compiler and multi-harness synchronization CLI.
+
+It is organized in three layers:
+
+- **Core** — compile the pack: `pack` / `schema` / `validate` / `resolve` / `lock`
+- **Harness Adapters** — sync the pack into target AI coding harnesses: `claude` / `codex` / `codebuddy` / `cursor`
+- **Governance Tools** — maintain and audit knowledge: docs `export`/`lint` / evidence `audit` / knowledge store / promotion
 
 ## Quick Start
 
@@ -69,6 +75,10 @@ Keep human-readable Markdown as the source truth and store claims, evidence, and
 
 ## CLI Commands
 
+Commands are grouped by the three layers: Core, Harness Adapters, and Governance Tools.
+
+### Core
+
 | Command | Description |
 |---------|-------------|
 | `illuminate pack validate <dir>` | Validate a pack directory |
@@ -77,25 +87,35 @@ Keep human-readable Markdown as the source truth and store claims, evidence, and
 | `illuminate mount verify <session-dir>` | Verify session mount integrity (hash + file checks) |
 | `illuminate run --pack <dir> --repo <path> [--skill <id>...]` | Materialize and launch Claude Code |
 | `illuminate run --pack <dir> --repo <path> --dry-run` | Materialize and print launch command without executing |
-| `illuminate evidence audit --repo <path>` | Run evidence audit |
-| `illuminate docs export-human --source <dir> --output <dir> [--config <json>]` | Copy configured human-readable Markdown without rewriting content |
-| `illuminate docs lint-human --source <dir> [--config <json>] [--all-markdown]` | Check human Markdown rules and local links |
 | `illuminate compat generate [--pack <dir>]` | Generate legacy compatibility dirs from canonical sources |
 | `illuminate compat check [--pack <dir>]` | Check compatibility dirs match canonical sources (files + SHA-256) |
+
+### Harness Adapters
+
+| Command | Description |
+|---------|-------------|
 | `illuminate sync codex --repo <path> [--pack <dir>] [--skill <id>...]` | Sync pack into target repo for Codex App |
 | `illuminate sync codebuddy --repo <path> [--pack <dir>] [--skill <id>...]` | Sync pack into target repo for CodeBuddy |
 | `illuminate sync cursor --repo <path> [--pack <dir>] [--skill <id>...] [--agents-compat]` | Sync pack into target repo for Cursor |
 | `illuminate sync check --repo <path> [--pack <dir>] [--harness codex\|codebuddy\|cursor]` | Verify sync integrity |
 | `illuminate sync clean --repo <path> [--harness codex\|codebuddy\|cursor]` | Remove Illuminate-synced artifacts |
 | `illuminate sync doctor --repo <path> --harness cursor` | Read-only Cursor sync diagnostics (exit 0 = healthy, 1 = issues) |
+
+### Governance Tools
+
+| Command | Description |
+|---------|-------------|
+| `illuminate evidence audit --repo <path>` | Run evidence audit |
+| `illuminate docs export-human --source <dir> --output <dir> [--config <json>]` | Copy configured human-readable Markdown without rewriting content |
+| `illuminate docs lint-human --source <dir> [--config <json>] [--all-markdown]` | Check human Markdown rules and local links |
+| `illuminate docs lint-knowledge --source <dir> [--config <json>]` | Validate Manifest owners, metadata IDs, and YAML `doc_refs` |
 | `illuminate knowledge pull --repo <path> [--store <dir>] [--manifest <json>]` | Pull configured project knowledge to central store |
 | `illuminate knowledge status --repo <path> [--store <dir>] [--manifest <json>]` | Compare configured project knowledge with central store |
 | `illuminate knowledge push --repo <path> [--store <dir>] [--manifest <json>] [--force]` | Push store documents back to project safely |
 | `illuminate knowledge candidate --repo <path> --source <path> --target <kind> [--anchor <ref>] [--notes <text>] [--store <dir>]` | Create a promotion candidate from a knowledge source with provenance |
-| `illuminate knowledge review --repo <path> --id <id> [--reviewer <name>] [--notes <text>] [--store <dir>]` | Move a candidate from `raw` to `reviewed` |
-| `illuminate knowledge promote --repo <path> --id <id> --pack <dir> [--target-path <path>] [--content <file>] [--dry-run] [--force] [--store <dir>]` | Promote a reviewed candidate into the Harness Pack (generalized via `--content`) |
+| `illuminate knowledge review --repo <path> --id <id> [--reviewer <name>] [--content <file>] [--notes <text>] [--store <dir>]` | Move a candidate from `raw` to `reviewed` |
+| `illuminate knowledge promote --repo <path> --id <id> --pack <dir> [--target-path <path>] [--dry-run] [--force] [--store <dir>]` | Promote a reviewed candidate into the Harness Pack |
 | `illuminate knowledge reject --repo <path> --id <id> [--reviewer <name>] [--superseded] [--pack <dir>] [--notes <text>] [--store <dir>]` | Reject a `raw`/`reviewed` candidate or mark a promoted one `superseded` (removing its pack artifact via `--pack`) |
-| `illuminate docs lint-knowledge --source <dir> [--config <json>]` | Validate Manifest owners, metadata IDs, and YAML `doc_refs` |
 
 ### Skill Selection
 

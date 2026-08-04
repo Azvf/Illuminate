@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "illuminate-harness"
 version = "0.1.0"
-description = "Git-versioned Harness Knowledge Pack + executable mount CLI for Claude Code"
+description = "Git-versioned engineering knowledge pack compiler and multi-harness synchronization CLI."
 requires-python = ">=3.9"
 dependencies = []
 
