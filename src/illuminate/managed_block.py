@@ -10,6 +10,8 @@ markers.
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from .hashutil import hash_string
+
 BEGIN_MARKER = "<!-- illuminate:begin"
 END_MARKER = "<!-- illuminate:end -->"
 
@@ -75,3 +77,30 @@ def remove_block(text: str) -> str:
     before = "\n".join(lines[:begin_idx]).rstrip("\n")
     after = "\n".join(lines[end_idx + 1:])
     return (before + "\n" + after).strip("\n") + "\n" if (before or after) else ""
+
+
+def extract_block_text(text: str) -> Optional[str]:
+    """Return the full managed block (markers + interior) if present, else None.
+
+    Lets callers inspect the block in isolation from user content that may sit
+    outside the markers.
+    """
+    lines = text.split("\n")
+    existing_range = find_block_range(lines)
+    if existing_range is None:
+        return None
+    begin_idx, end_idx = existing_range
+    return "\n".join(lines[begin_idx:end_idx + 1])
+
+
+def hash_block_text(text: str) -> Optional[str]:
+    """Return the sha256 of the managed block in ``text``, or None if the text
+    holds no complete illuminate block.
+
+    Hashing only the block (not the whole file) lets user content outside the
+    markers change freely without breaking Illuminate's ownership tracking.
+    """
+    block = extract_block_text(text)
+    if block is None:
+        return None
+    return hash_string(block)

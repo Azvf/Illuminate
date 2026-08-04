@@ -1225,6 +1225,176 @@ class TestSyncCursor(unittest.TestCase):
         finally:
             _make_writable(repo / ".illuminate" / "cursor-lock.json")
 
+    # ── Mode-switch conflict: old artifact modified but still illuminate (P1-2) ──
+
+    def test_default_to_compat_switch_aborts_when_old_mdc_modified(self):
+        """Switching default->compat when the old core.mdc was modified but
+        still carries the illuminate block must abort before any write, leaving
+        no half-completed switch and no double rule source."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo)
+        mdc = repo / _RULES_REL
+        self.assertTrue(mdc.exists())
+        # Modify the .mdc but keep the illuminate block inside it.
+        mdc.write_text(
+            mdc.read_text(encoding="utf-8").replace(
+                "Synchronized skills:", "Synchronized skillz:"
+            ),
+            encoding="utf-8",
+        )
+        lock_before = (repo / ".illuminate" / "cursor-lock.json").read_bytes()
+
+        with self.assertRaises(ValueError):
+            sync_cursor(CORE_PACK, repo, agents_compat=True)
+
+        # Fail-before-write: AGENTS.md never gained a block, old core.mdc
+        # survives, lock is byte-identical.
+        self.assertNotIn(_BEGIN_MARKER, agents_path.read_text(encoding="utf-8"))
+        self.assertTrue(mdc.exists(), "Modified core.mdc must not be deleted")
+        self.assertEqual(
+            (repo / ".illuminate" / "cursor-lock.json").read_bytes(),
+            lock_before,
+            "Lock must be unchanged by an aborted default->compat switch",
+        )
+
+    def test_compat_to_default_switch_aborts_when_block_modified(self):
+        """Switching compat->default when the AGENTS block was modified but
+        still contains illuminate content must abort before any write."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+        self.assertIn(_BEGIN_MARKER, agents_path.read_text(encoding="utf-8"))
+        agents_path.write_text(
+            agents_path.read_text(encoding="utf-8").replace(
+                "Synchronized skills:", "Synchronized skillz:"
+            ),
+            encoding="utf-8",
+        )
+        lock_before = (repo / ".illuminate" / "cursor-lock.json").read_bytes()
+
+        with self.assertRaises(ValueError):
+            sync_cursor(CORE_PACK, repo)
+
+        # Fail-before-write: no core.mdc, the modified block is preserved, and
+        # the lock is byte-identical.
+        self.assertFalse((repo / _RULES_REL).exists())
+        self.assertIn(_BEGIN_MARKER, agents_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            (repo / ".illuminate" / "cursor-lock.json").read_bytes(),
+            lock_before,
+            "Lock must be unchanged by an aborted compat->default switch",
+        )
+
+    def test_modified_old_mdc_without_illuminate_is_taken_over(self):
+        """If the old core.mdc was replaced by the user (no illuminate content
+        remains), a default->compat switch may safely proceed and leave the
+        user's file alone."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo)
+        mdc = repo / _RULES_REL
+        self.assertTrue(mdc.exists())
+        # User replaced the whole .mdc with their own content (no markers).
+        mdc.write_text("# My custom rule\n", encoding="utf-8")
+
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+
+        # Switch completes: AGENTS.md gains the block; the user's file is kept.
+        self.assertIn(_BEGIN_MARKER, agents_path.read_text(encoding="utf-8"))
+        self.assertEqual(mdc.read_text(encoding="utf-8"), "# My custom rule\n")
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertTrue(ok, f"Check should pass after taken-over switch: {issues}")
+
+    # ── Block hash vs whole-file hash (P1-2) ──
+
+    def test_block_outer_content_does_not_block_compat_to_default_switch(self):
+        """User content added outside the illuminate block must not prevent a
+        compat->default switch from removing the block."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+        self.assertIn(_BEGIN_MARKER, agents_path.read_text(encoding="utf-8"))
+        agents_path.write_text(
+            agents_path.read_text(encoding="utf-8") + "\n\nUser notes.\n",
+            encoding="utf-8",
+        )
+
+        sync_cursor(CORE_PACK, repo)
+
+        content = agents_path.read_text(encoding="utf-8")
+        self.assertNotIn(_BEGIN_MARKER, content, "Block must be removed on switch")
+        self.assertIn("# Project", content)
+        self.assertIn("User notes.", content, "Outer user content must survive")
+
+    def test_clean_removes_block_with_outer_user_content(self):
+        """Clean removes only the illuminate block in compat mode, preserving
+        user content outside the markers even though the whole-file hash
+        differs from any recorded value."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+        agents_path.write_text(
+            agents_path.read_text(encoding="utf-8") + "\n\nUser notes.\n",
+            encoding="utf-8",
+        )
+
+        clean_sync(repo)
+
+        content = agents_path.read_text(encoding="utf-8")
+        self.assertNotIn(_BEGIN_MARKER, content)
+        self.assertIn("User notes.", content)
+
+    def test_compat_check_passes_with_outer_user_content(self):
+        """check_sync in compat mode compares the block hash, so user content
+        outside the block does not cause a false hash-mismatch."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+        agents_path.write_text(
+            agents_path.read_text(encoding="utf-8") + "\n\nUser notes.\n",
+            encoding="utf-8",
+        )
+
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertTrue(ok, f"Check should pass despite outer user content: {issues}")
+
+    # ── Preflight probe set (P1-2) ──
+
+    def test_first_default_sync_ignores_readonly_agents_md(self):
+        """An ordinary default-mode sync never writes/deletes AGENTS.md, so a
+        read-only AGENTS.md must not fail preflight."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\nCustom rules.\n", encoding="utf-8")
+        _set_readonly(agents_path)
+        try:
+            sync_cursor(CORE_PACK, repo)  # must succeed
+            self.assertTrue((repo / _RULES_REL).exists())
+        finally:
+            _make_writable(agents_path)
+
+    def test_repeat_default_sync_ignores_readonly_agents_md(self):
+        """A second default-mode sync must not probe AGENTS.md either, so a
+        read-only AGENTS.md is ignored and the sync stays healthy."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo)
+        _set_readonly(agents_path)
+        try:
+            sync_cursor(CORE_PACK, repo)
+            ok, issues = check_sync(CORE_PACK, repo)
+            self.assertTrue(ok, f"Check should pass after repeat default sync: {issues}")
+        finally:
+            _make_writable(agents_path)
+
 
 class TestCursorCli(unittest.TestCase):
     """Minimal CLI routing coverage for the cursor sync branch."""

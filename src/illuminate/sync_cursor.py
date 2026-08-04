@@ -47,6 +47,7 @@ from .hashutil import hash_file, hash_directory, lock_hash
 from .lockfile import build_lock_envelope
 from .managed_block import (
     BEGIN_MARKER as _BEGIN_MARKER,
+    hash_block_text,
     merge_block,
     remove_block,
 )
@@ -143,33 +144,39 @@ def _desired_commands(exposed: Set[str]) -> Dict[str, str]:
     }
 
 
-def _preflight_target_paths(repo_root: Path, agents_compat: bool) -> List[str]:
-    """Verify every target Illuminate may create/write/delete under repo_root
-    is writable (or creatable), including an already-existing target file itself
-    (not just its parent directory). Fails closed before any write.
+def _preflight_target_paths(repo_root: Path, lock: dict, agents_compat: bool) -> List[str]:
+    """Verify every target Illuminate will actually write/delete under
+    repo_root is writable (or creatable), including an already-existing target
+    file itself (not just its parent directory). Fails closed before any write.
 
-    Both modes' artifacts are probed unconditionally, because a mode switch
-    touches the other mode's artifact: switching to default deletes the old
-    AGENTS.md block, and switching to compat deletes the old core.mdc. Probing
-    both keeps every failure in preflight, before any write happens.
-
-    `agents_compat` (the target mode) is retained for API stability; it no
-    longer changes the probe set since either switch direction may reach either
-    artifact. Returns the probed artifact paths (both modes).
+    The probe set is computed from the previous mode (recorded in ``lock``)
+    and the target mode ``agents_compat``, so only paths this run really
+    touches are probed. AGENTS.md is probed exactly when it is written
+    (compat mode) or its old block is removed (switching compat -> default);
+    core.mdc is probed exactly when it is written (default mode) or the old
+    one is removed (switching default -> compat). An ordinary default sync
+    therefore never probes a read-only AGENTS.md that it will not touch.
 
     The lock file itself is probed (not just its directory): on a second sync
     or a mode switch the lock already exists and is written in Phase 2, so a
     read-only lock must fail closed before any write. On a first sync the lock
     does not yet exist, so the probe falls back to the nearest existing
     ancestor (_LOCK_DIR)."""
+    old_compat = bool(lock.get("agents_compat", False))
     artifacts = [
         _SKILLS_DIR,
         _COMMANDS_DIR,
         _LOCK_DIR,
         f"{_LOCK_DIR}/{_LOCK_FILE}",
-        "AGENTS.md",
-        _RULES_REL,
     ]
+    # AGENTS.md is written in compat mode and edited when its old block is
+    # retired (compat -> default switch).
+    if agents_compat or old_compat:
+        artifacts.append("AGENTS.md")
+    # core.mdc is written in default mode and removed when the old one is
+    # retired (default -> compat switch).
+    if not agents_compat or (agents_compat and not old_compat):
+        artifacts.append(_RULES_REL)
     for rel in artifacts:
         ensure_writable(repo_root / rel)
     return artifacts
@@ -254,43 +261,119 @@ def _write_lock(
 # Mode-switch cleanup
 # ---------------------------------------------------------------------------
 
+def _old_rules_mdc_state(repo_root: Path, lock: dict) -> str:
+    """Classify the old core.mdc against the lock: 'clean' (unmodified, or no
+    ownership record), 'conflict' (modified but still Illuminate-owned),
+    'taken_over' (user replaced/removed the file entirely)."""
+    rules_path = repo_root / _RULES_DIR / _RULES_FILE
+    prev_hash = lock.get("rules_md_hash")
+    if not rules_path.exists() or not prev_hash:
+        return "clean"
+    if hash_file(rules_path) == prev_hash:
+        return "clean"
+    if _BEGIN_MARKER in rules_path.read_text(encoding="utf-8"):
+        return "conflict"
+    return "taken_over"
+
+
+def _old_agents_block_state(repo_root: Path, lock: dict) -> str:
+    """Classify the old AGENTS.md illuminate block against the lock:
+    'clean' (block hash matches, or no ownership record), 'conflict'
+    (block modified but still present), 'taken_over' (no block found)."""
+    prev_hash = lock.get("agents_md_hash")
+    if not prev_hash:
+        return "clean"
+    agents_path = repo_root / "AGENTS.md"
+    if not agents_path.exists():
+        return "taken_over"
+    current_block_hash = hash_block_text(agents_path.read_text(encoding="utf-8"))
+    if current_block_hash is None:
+        return "taken_over"
+    if current_block_hash == prev_hash:
+        return "clean"
+    return "conflict"
+
+
+def _preflight_mode_switch(repo_root: Path, lock: dict, agents_compat: bool) -> None:
+    """Fail before any write if a mode switch cannot cleanly retire the old
+    artifact.
+
+    Retiring an old artifact that was modified but still carries Illuminate
+    content would otherwise leave two live rule sources (the new mode plus the
+    stale old one). Raising here, before the new mode is written, guarantees a
+    switch either completes fully or leaves the repository untouched."""
+    old_compat = bool(lock.get("agents_compat", False))
+    if old_compat == agents_compat:
+        return  # no switch: the old artifact is not being retired
+    if agents_compat:
+        # default -> compat: retiring the old core.mdc
+        if _old_rules_mdc_state(repo_root, lock) == "conflict":
+            raise ValueError(
+                "Cannot switch to agents_compat: the existing core.mdc was "
+                "modified but still contains Illuminate content. Remove or "
+                "resolve the illuminate block before switching."
+            )
+    else:
+        # compat -> default: retiring the old AGENTS.md block
+        if _old_agents_block_state(repo_root, lock) == "conflict":
+            raise ValueError(
+                "Cannot switch to default mode: the existing AGENTS.md "
+                "illuminate block was modified but still contains Illuminate "
+                "content. Remove or resolve the block before switching."
+            )
+
+
 def _remove_old_rules_mdc(repo_root: Path, lock: dict) -> None:
     """Remove the default-mode core.mdc when switching to compat mode.
 
-    Only deletes a file we previously wrote: the current file must be
-    byte-identical to the lock-recorded rules_md_hash. A core.mdc created or
-    modified by the user is never deleted. If the file cannot be deleted the
-    new mode is already written, so we raise to surface the incomplete cleanup
-    (a mode switch has happened; only the stale artifact removal is pending).
+    Only acts when the lock records a prior core.mdc (rules_md_hash);
+    otherwise core.mdc is never touched. Among recorded files, only one whose
+    hash matches the lock is deleted. A file modified but still containing
+    Illuminate content aborts the switch (conflict); a file the user replaced
+    or removed is left alone (taken over).
     """
+    if not lock.get("rules_md_hash"):
+        return
+    state = _old_rules_mdc_state(repo_root, lock)
+    if state == "conflict":
+        raise ValueError(
+            f"Cannot remove old rules file {_RULES_REL}: it was modified but "
+            "still contains Illuminate content"
+        )
+    if state == "taken_over":
+        return
     rules_path = repo_root / _RULES_DIR / _RULES_FILE
-    if not rules_path.exists():
-        return
-    prev_hash = lock.get("rules_md_hash")
-    if not prev_hash or hash_file(rules_path) != prev_hash:
-        return
-    try:
-        rules_path.unlink()
-    except OSError:
-        raise ValueError(f"Cannot remove old rules file: {_RULES_REL}")
+    if rules_path.exists():
+        try:
+            rules_path.unlink()
+        except OSError:
+            raise ValueError(f"Cannot remove old rules file: {_RULES_REL}")
 
 
 def _remove_old_agents_block(repo_root: Path, lock: dict) -> None:
     """Remove the compat-mode AGENTS.md block when switching to default mode.
 
-    Only removes a block we previously wrote: the current AGENTS.md must be
-    byte-identical to the lock-recorded agents_md_hash. A block modified or
-    written by Codex or the user is never deleted.
-    """
-    prev_agents_hash = lock.get("agents_md_hash")
-    if not prev_agents_hash:
+    Only acts when the lock records a prior AGENTS.md block (agents_md_hash);
+    otherwise AGENTS.md is never touched. Among recorded blocks, only one whose
+    current block hash matches the lock is removed (unmodified since we wrote
+    it). A block modified but still present aborts the switch (conflict); a
+    block the user removed is left alone (taken over). User content outside
+    the block never blocks removal."""
+    if not lock.get("agents_md_hash"):
+        return
+    state = _old_agents_block_state(repo_root, lock)
+    if state == "conflict":
+        raise ValueError(
+            "Cannot remove old AGENTS.md illuminate block: it was modified "
+            "but still contains Illuminate content"
+        )
+    if state == "taken_over":
         return
     agents_path = repo_root / "AGENTS.md"
-    if agents_path.exists() and hash_file(agents_path) == prev_agents_hash:
-        content = agents_path.read_text(encoding="utf-8")
-        new_content = remove_block(content)
-        if new_content != content:
-            agents_path.write_text(new_content, encoding="utf-8")
+    content = agents_path.read_text(encoding="utf-8")
+    new_content = remove_block(content)
+    if new_content != content:
+        agents_path.write_text(new_content, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +433,8 @@ def sync_cursor(
     preflight_managed_command_tree(
         repo_root / _COMMANDS_DIR, desired_commands, previous_commands or {}
     )
-    _preflight_target_paths(repo_root, agents_compat)
+    _preflight_target_paths(repo_root, lock, agents_compat)
+    _preflight_mode_switch(repo_root, lock, agents_compat)
 
     # 4. Phase 2 — write. The rules artifact is handled as a mode transaction:
     #    write the new-mode artifact first, then clean the old-mode artifact.
@@ -374,13 +458,14 @@ def sync_cursor(
         agents_path = repo_root / "AGENTS.md"
         new_content, modified = merge_block(agents_path, block_text)
         agents_path.write_text(new_content, encoding="utf-8")
-        rules_artifact_hash = hash_file(agents_path)
+        # Record the block hash, not the whole-file hash, so user content
+        # outside the markers can change without breaking ownership tracking.
+        rules_artifact_hash = hash_block_text(new_content)
         _remove_old_rules_mdc(repo_root, lock)
     else:
         # New mode = core.mdc. Write it, then remove the old AGENTS.md block
-        # we previously wrote, but only if it is still byte-identical to the
-        # lock-recorded hash (never delete a block that Codex or the user has
-        # since modified).
+        # we previously wrote, but only when its block hash still matches the
+        # lock (never delete a block that Codex or the user has modified).
         rules_path = repo_root / _RULES_DIR / _RULES_FILE
         rules_path.parent.mkdir(parents=True, exist_ok=True)
         new_mdc = _build_rules_mdc(block_text, "Illuminate governance rules")
@@ -446,9 +531,9 @@ def check_sync(pack_dir: Path, repo_root: Path) -> Tuple[bool, List[str]]:
             if _BEGIN_MARKER not in content:
                 issues.append("AGENTS.md missing illuminate block markers")
             if lock.get("agents_md_hash"):
-                actual = hash_file(agents_path)
+                actual = hash_block_text(content)
                 if actual != lock["agents_md_hash"]:
-                    issues.append("AGENTS.md hash mismatch — run sync again")
+                    issues.append("AGENTS.md block hash mismatch — run sync again")
     else:
         rules_path = repo_root / _RULES_DIR / _RULES_FILE
         if not rules_path.exists():
@@ -643,22 +728,19 @@ def clean_sync(repo_root: Path) -> dict:
     # untouched (consistent with skills/commands).
     if agents_compat:
         agents_path = repo_root / "AGENTS.md"
-        # Fail-safe: only remove the block we wrote when the current file is
-        # byte-identical to the lock-recorded hash. AGENTS.md may be shared with
-        # Codex or modified by the user, so never delete a block whose hash no
-        # longer matches. If the lock has no agents_md_hash (an old lock), we
+        # Fail-safe: only remove the block we wrote when its current block hash
+        # matches the lock-recorded hash. User content outside the block does
+        # not block removal; a block whose hash no longer matches (modified by
+        # Codex or the user) is never deleted. Without a recorded hash we
         # cannot prove ownership, so conservatively skip deletion.
         prev_hash = lock.get("agents_md_hash")
-        if (
-            prev_hash
-            and agents_path.exists()
-            and hash_file(agents_path) == prev_hash
-        ):
+        if prev_hash and agents_path.exists():
             content = agents_path.read_text(encoding="utf-8")
-            new_content = remove_block(content)
-            if new_content != content:
-                agents_path.write_text(new_content, encoding="utf-8")
-                removed.append("AGENTS.md illuminate block")
+            if hash_block_text(content) == prev_hash:
+                new_content = remove_block(content)
+                if new_content != content:
+                    agents_path.write_text(new_content, encoding="utf-8")
+                    removed.append("AGENTS.md illuminate block")
     elif has_lock:
         rules_dir = repo_root / _RULES_DIR
         if rules_dir.exists():
@@ -666,19 +748,18 @@ def clean_sync(repo_root: Path) -> dict:
             removed.append(str(_RULES_DIR))
         # A lock that records a previous agents_compat run (e.g. before the
         # mode was switched to default) may still own an AGENTS.md block.
-        # Remove it only if it is byte-identical to the lock-recorded hash, so
-        # a block written/modified by Codex or the user is never deleted.
+        # Remove it only if its block hash matches the lock, so a block
+        # written/modified by Codex or the user is never deleted.
         prev_agents_hash = lock.get("agents_md_hash")
         if prev_agents_hash:
             agents_path = repo_root / "AGENTS.md"
-            if (
-                agents_path.exists()
-                and hash_file(agents_path) == prev_agents_hash
-            ):
-                new_content = remove_block(agents_path.read_text(encoding="utf-8"))
-                if new_content != agents_path.read_text(encoding="utf-8"):
-                    agents_path.write_text(new_content, encoding="utf-8")
-                    removed.append("AGENTS.md illuminate block")
+            if agents_path.exists():
+                content = agents_path.read_text(encoding="utf-8")
+                if hash_block_text(content) == prev_agents_hash:
+                    new_content = remove_block(content)
+                    if new_content != content:
+                        agents_path.write_text(new_content, encoding="utf-8")
+                        removed.append("AGENTS.md illuminate block")
 
     # Remove lock
     lock_path = repo_root / _LOCK_DIR / _LOCK_FILE
