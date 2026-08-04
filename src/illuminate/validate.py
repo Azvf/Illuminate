@@ -93,12 +93,29 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
 
     pack_id = manifest.get("id", "<unknown>")
 
+    # Guard the top-level collection shapes before helpers consume them, so a
+    # malformed manifest yields a readable error instead of a raw
+    # AttributeError/TypeError leaking out of a helper.
+    skills = manifest.get("skills", [])
+    if not isinstance(skills, list):
+        errors.append(f"[{pack_id}] skills must be a list: {skills!r}")
+        skills = []
+
     # 1b. Load contracts and validate manifest + contracts against JSON Schemas
     try:
-        contracts = load_skill_contracts(pack_dir, manifest)
+        contracts = load_skill_contracts(pack_dir, manifest) if skills else []
     except Exception as e:
         errors.append(str(e))
         contracts = []
+    # Guard: every contract entry must be an object. A contract.json that holds
+    # a JSON array or scalar must not crash the downstream .get() calls.
+    valid_contracts = []
+    for contract in contracts:
+        if not isinstance(contract, dict):
+            errors.append(f"[{pack_id}] contract must be an object: {contract!r}")
+        else:
+            valid_contracts.append(contract)
+    contracts = valid_contracts
     _validate_against_schemas(pack_dir, manifest, contracts, errors)
 
     # 2. Check required manifest fields
@@ -124,10 +141,6 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
     # 3. Validate skill entries
     skill_ids = []
     skill_dirs = []
-    skills = manifest.get("skills", [])
-    if not isinstance(skills, list):
-        errors.append(f"[{pack_id}] skills must be a list: {skills!r}")
-        skills = []
     for entry in skills:
         if not isinstance(entry, dict):
             errors.append(f"[{pack_id}] skill entry must be an object: {entry!r}")
@@ -201,6 +214,9 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
 
         # Check relation references exist
         relations = contract.get("relations", {})
+        if not isinstance(relations, dict):
+            errors.append(f"[{pack_id}] skill '{cid}' relations must be an object: {relations!r}")
+            relations = {}
         for rel_name in ("recommended_previous", "recommended_next", "activation_conflicts"):
             for ref in relations.get(rel_name, []):
                 if ref not in skill_ids:
@@ -212,7 +228,10 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
         for ref in relations.get("activation_conflicts", []):
             ref_contract = next((c for c in contracts if c.get("id") == ref), None)
             if ref_contract:
-                if cid not in ref_contract.get("relations", {}).get("activation_conflicts", []):
+                ref_relations = ref_contract.get("relations", {})
+                if not isinstance(ref_relations, dict):
+                    ref_relations = {}
+                if cid not in ref_relations.get("activation_conflicts", []):
                     errors.append(
                         f"[{pack_id}] activation_conflicts not bidirectional: "
                         f"'{cid}' -> '{ref}' but not back"
@@ -280,6 +299,12 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
         errors.append(str(e))
         policy_index = {"policies": []}
 
+    # The policy index may itself be a JSON array or scalar; it must be an
+    # object with a "policies" list before it can be inspected.
+    if not isinstance(policy_index, dict):
+        errors.append(f"[{pack_id}] policy index must be an object: {policy_index!r}")
+        policy_index = {"policies": []}
+
     # The policy index has no schema, so validate id/path uniqueness and a
     # light structure here. priority is an ordering weight used by
     # get_policy_files (sorted descending); duplicate priorities are allowed
@@ -287,6 +312,9 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
     policy_ids = []
     policy_paths = []
     for policy in policy_index.get("policies", []):
+        if not isinstance(policy, dict):
+            errors.append(f"[{pack_id}] policy entry must be an object: {policy!r}")
+            continue
         pid = policy.get("id")
         ppath = policy.get("path")
         pprio = policy.get("priority")
@@ -300,9 +328,9 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
             policy_ids.append(pid)
         if isinstance(ppath, str) and ppath:
             policy_paths.append(ppath)
-        policy_path = pack_dir / "policies" / (ppath or "")
-        if not policy_path.exists():
-            errors.append(f"[{pack_id}] policy file not found: {ppath}")
+            policy_path = pack_dir / "policies" / ppath
+            if not policy_path.exists():
+                errors.append(f"[{pack_id}] policy file not found: {ppath}")
     for pid in set(policy_ids):
         if policy_ids.count(pid) > 1:
             errors.append(f"[{pack_id}] duplicate policy id: {pid}")
@@ -311,15 +339,36 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
             errors.append(f"[{pack_id}] duplicate policy path: {ppath}")
 
     # 7. Validate evidence config exists
-    evidence_config = get_evidence_config_path(pack_dir, manifest)
+    evidence = manifest.get("evidence", {})
+    if not isinstance(evidence, dict):
+        errors.append(f"[{pack_id}] evidence must be an object: {evidence!r}")
+        evidence_config = None
+    else:
+        evidence_config = get_evidence_config_path(pack_dir, manifest)
     if evidence_config and not evidence_config.exists():
         errors.append(f"[{pack_id}] evidence config not found: {evidence_config}")
 
     # 8. Check for absolute paths in contracts
     abs_path_re = re.compile(r"^[A-Za-z]:[/\\]|^/")
     for contract in contracts:
-        for perm_list in contract.get("permissions", {}).values():
+        permissions = contract.get("permissions", {})
+        if not isinstance(permissions, dict):
+            errors.append(
+                f"[{pack_id}] contract '{contract.get('id')}' permissions must be an object: {permissions!r}"
+            )
+            continue
+        for perm_list in permissions.values():
+            if not isinstance(perm_list, (list, tuple)):
+                errors.append(
+                    f"[{pack_id}] contract '{contract.get('id')}' permission set must be a list: {perm_list!r}"
+                )
+                continue
             for perm in perm_list:
+                if not isinstance(perm, str):
+                    errors.append(
+                        f"[{pack_id}] contract '{contract.get('id')}' permission must be a string: {perm!r}"
+                    )
+                    continue
                 if abs_path_re.match(perm):
                     errors.append(
                         f"[{pack_id}] absolute path in permissions for '{contract.get('id')}': {perm}"

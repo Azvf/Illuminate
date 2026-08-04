@@ -511,6 +511,182 @@ class TestMalformedInputNoCrash(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("duplicate reference path" in e for e in errors), errors)
 
+    def _write_pack_with_contract(self, contract_content) -> Path:
+        """Build a minimal pack with one skill whose contract is given verbatim."""
+        import tempfile
+        root = Path(tempfile.mkdtemp())
+        pack_dir = root / "pack"
+        skill_path = pack_dir / "skills" / "demo"
+        skill_path.mkdir(parents=True)
+        (skill_path / "SKILL.md").write_text(
+            "---\nname: demo\ndescription: A demo skill\n---\n# Demo\n", encoding="utf-8")
+        (skill_path / "contract.json").write_text(
+            json.dumps(contract_content), encoding="utf-8")
+        pol = pack_dir / "policies"
+        pol.mkdir(parents=True)
+        (pol / "index.json").write_text(
+            json.dumps({"schema_version": 1, "policies": []}), encoding="utf-8")
+        (pack_dir / "pack.json").write_text(json.dumps({
+            "schema_version": 1,
+            "id": "demo.pack",
+            "version": "0.1.0",
+            "name": "demo-pack",
+            "skills": [{"id": "demo.pack.demo", "dir": "skills/demo"}],
+            "references": [],
+            "evidence": {},
+            "policies": {"index": "policies/index.json"},
+        }), encoding="utf-8")
+        return pack_dir
+
+    def _overwrite_policy_index(self, pack_dir, index_content) -> Path:
+        """Overwrite the pack's policy index with a given JSON value."""
+        index = pack_dir / "policies" / "index.json"
+        index.write_text(json.dumps(index_content), encoding="utf-8")
+        return pack_dir
+
+    def test_evidence_non_dict_reports_clean_error(self):
+        """[A] evidence: [1, 2] must not crash get_evidence_config_path."""
+        pack_dir = self._write_minimal_pack({
+            "schema_version": 1,
+            "id": "demo.pack",
+            "version": "0.1.0",
+            "name": "demo-pack",
+            "skills": [],
+            "references": [],
+            "evidence": [1, 2],
+            "policies": {"index": "policies/index.json"},
+        })
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("evidence must be an object" in e for e in errors), errors)
+
+    def test_policy_entry_non_dict_reports_clean_error(self):
+        """[B] a policy entry that is not an object must not crash policy.get."""
+        pack_dir = self._overwrite_policy_index(
+            self._write_minimal_pack({
+                "schema_version": 1,
+                "id": "demo.pack",
+                "version": "0.1.0",
+                "name": "demo-pack",
+                "skills": [],
+                "references": [],
+                "evidence": {},
+                "policies": {"index": "policies/index.json"},
+            }),
+            {"schema_version": 1, "policies": ["not-a-dict", 42]},
+        )
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("policy entry must be an object" in e for e in errors), errors)
+
+    def test_policy_path_int_reports_clean_error(self):
+        """[C] a numeric policy path must not crash on path concatenation."""
+        pack_dir = self._overwrite_policy_index(
+            self._write_minimal_pack({
+                "schema_version": 1,
+                "id": "demo.pack",
+                "version": "0.1.0",
+                "name": "demo-pack",
+                "skills": [],
+                "references": [],
+                "evidence": {},
+                "policies": {"index": "policies/index.json"},
+            }),
+            {"schema_version": 1, "policies": [
+                {"id": "demo.policy", "path": 7, "priority": 100},
+            ]},
+        )
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("invalid path" in e for e in errors), errors)
+
+    def test_policy_index_top_level_array_reports_clean_error(self):
+        """[D] a policy index that is a JSON array must not crash policy_index.get."""
+        pack_dir = self._overwrite_policy_index(
+            self._write_minimal_pack({
+                "schema_version": 1,
+                "id": "demo.pack",
+                "version": "0.1.0",
+                "name": "demo-pack",
+                "skills": [],
+                "references": [],
+                "evidence": {},
+                "policies": {"index": "policies/index.json"},
+            }),
+            [{"id": "x"}],
+        )
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("policy index must be an object" in e for e in errors), errors)
+
+    def test_contract_array_reports_clean_error(self):
+        """[E] a contract.json that is a JSON array must not crash schema checks."""
+        pack_dir = self._write_pack_with_contract([1, 2])
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("contract must be an object" in e for e in errors), errors)
+
+    def test_contract_relations_non_dict_reports_clean_error(self):
+        """[F] contract.relations: [...] must not crash relations.get."""
+        pack_dir = self._write_pack_with_contract({
+            "schema_version": 1,
+            "id": "demo.pack.demo",
+            "version": "0.1.0",
+            "entry": "SKILL.md",
+            "kind": "skill",
+            "activation": {"mode": "explicit"},
+            "relations": ["recommended_next"],
+        })
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("relations must be an object" in e for e in errors), errors)
+
+    def test_contract_permissions_list_reports_clean_error(self):
+        """[G] contract.permissions: [1, 2] must not crash .values()."""
+        pack_dir = self._write_pack_with_contract({
+            "schema_version": 1,
+            "id": "demo.pack.demo",
+            "version": "0.1.0",
+            "entry": "SKILL.md",
+            "kind": "skill",
+            "activation": {"mode": "explicit"},
+            "permissions": [1, 2],
+        })
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("permissions must be an object" in e for e in errors), errors)
+
+    def test_contract_permission_set_non_iterable_reports_clean_error(self):
+        """[G] contract.permissions: {"fs": 5} must not crash iterating the set."""
+        pack_dir = self._write_pack_with_contract({
+            "schema_version": 1,
+            "id": "demo.pack.demo",
+            "version": "0.1.0",
+            "entry": "SKILL.md",
+            "kind": "skill",
+            "activation": {"mode": "explicit"},
+            "permissions": {"fs": 5},
+        })
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("permission set must be a list" in e for e in errors), errors)
+
+    def test_skills_dict_top_level_reports_clean_error(self):
+        """skills: {...} (not a list) must not leak a raw TypeError from load_skill_contracts."""
+        pack_dir = self._write_minimal_pack({
+            "schema_version": 1,
+            "id": "demo.pack",
+            "version": "0.1.0",
+            "name": "demo-pack",
+            "skills": {"demo": "skills/demo"},
+            "references": [],
+            "evidence": {},
+            "policies": {"index": "policies/index.json"},
+        })
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("skills must be a list" in e for e in errors), errors)
+
 
 if __name__ == "__main__":
     unittest.main()
