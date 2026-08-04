@@ -114,10 +114,26 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
             errors.append(f"[{pack_id}] skill dir not found: {skill_path}")
             continue
 
-        # Check SKILL.md exists
+        # Check SKILL.md exists and has a legal frontmatter (name/description)
         skill_md = skill_path / "SKILL.md"
         if not skill_md.exists():
             errors.append(f"[{pack_id}] SKILL.md not found for skill '{sid}'")
+            continue
+        try:
+            md_text = skill_md.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"[{pack_id}] SKILL.md unreadable for skill '{sid}': {exc}")
+            continue
+        fm = re.match(r"^---\n(.*?)\n---", md_text, re.DOTALL)
+        if not fm:
+            errors.append(f"[{pack_id}] SKILL.md for skill '{sid}' lacks a frontmatter block")
+        else:
+            fm_body = fm.group(1)
+            for key in ("name", "description"):
+                if not re.search(rf"(?m)^{key}:\s*\S", fm_body):
+                    errors.append(
+                        f"[{pack_id}] SKILL.md for skill '{sid}' lacks non-empty '{key}'"
+                    )
 
     # 4. Validate contracts (loaded in step 1b)
     contract_ids = []

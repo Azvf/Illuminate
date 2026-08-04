@@ -114,5 +114,59 @@ class TestContractSchema(unittest.TestCase):
         )
 
 
+class TestSkillFrontmatter(unittest.TestCase):
+    """validate_pack requires SKILL.md to carry a name/description frontmatter."""
+
+    def _make_pack_with_skill(self, skill_md: str) -> Path:
+        import tempfile
+        root = Path(tempfile.mkdtemp())
+        pack_dir = root / "pack"
+        skills_dir = pack_dir / "skills" / "demo"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
+        (skills_dir / "contract.json").write_text(json.dumps({
+            "schema_version": 1,
+            "id": "demo.pack.demo",
+            "version": "0.1.0",
+            "entry": "SKILL.md",
+            "kind": "skill",
+            "activation": {"mode": "explicit"},
+        }), encoding="utf-8")
+        (pack_dir / "pack.json").write_text(json.dumps({
+            "schema_version": 1,
+            "id": "demo.pack",
+            "version": "0.1.0",
+            "name": "demo-pack",
+            "skills": [{"id": "demo.pack.demo", "dir": "skills/demo"}],
+            "references": [],
+            "policies": {"index": "policies/index.json"},
+            "evidence": {},
+        }), encoding="utf-8")
+        pol = pack_dir / "policies"
+        pol.mkdir()
+        (pol / "index.json").write_text(
+            json.dumps({"schema_version": 1, "policies": []}), encoding="utf-8")
+        return pack_dir
+
+    def test_skill_missing_frontmatter_fails(self):
+        pack_dir = self._make_pack_with_skill("# No frontmatter\n")
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("frontmatter" in e for e in errors), errors)
+
+    def test_skill_missing_name_or_description_fails(self):
+        pack_dir = self._make_pack_with_skill(
+            "---\nname: demo\n---\n# Missing description\n")
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("description" in e for e in errors), errors)
+
+    def test_skill_legal_frontmatter_validates(self):
+        pack_dir = self._make_pack_with_skill(
+            "---\nname: demo\ndescription: A demo skill\n---\n# Demo\n")
+        ok, errors = validate_pack(pack_dir)
+        self.assertTrue(ok, errors)
+
+
 if __name__ == "__main__":
     unittest.main()
