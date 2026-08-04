@@ -202,9 +202,18 @@ class TestDetectUnsupportedYaml(unittest.TestCase):
         self.assertIsNotNone(detect_unsupported_yaml("description: |2"))
         self.assertIsNotNone(detect_unsupported_yaml("notes: >-"))
 
-    def test_nested_mapping_is_detected(self):
-        self.assertIsNotNone(detect_unsupported_yaml("  statement: no ref"))
-        self.assertIsNotNone(detect_unsupported_yaml("    owner: alice"))
+    def test_ordinary_indented_scalar_fields_are_clean(self):
+        # Unknown indented scalar fields (e.g. claims.yaml business metadata)
+        # are not a syntax error: the parser simply does not interpret them.
+        legal = [
+            "  statement: no ref",
+            "    owner: alice",
+            "  state: verified",
+            "  evidence:",
+            "    - 30-modules/demo.md",
+        ]
+        for line in legal:
+            self.assertIsNone(detect_unsupported_yaml(line), line)
 
 
 class TestManifestFailClosed(unittest.TestCase):
@@ -291,19 +300,29 @@ class TestKnowledgeLintFailClosed(unittest.TestCase):
             errors = lint_knowledge(docs)
             self.assertTrue(any("anchor/alias" in error for error in errors), errors)
 
-    def test_metadata_nested_mapping_is_reported(self):
+    def test_metadata_extra_scalar_fields_are_legal(self):
+        # Business metadata fields (state/statement/owner/evidence) alongside a
+        # doc_refs subtree are not a syntax error; doc_refs still resolves.
         with tempfile.TemporaryDirectory() as tmp:
             docs = _flat_root(Path(tmp))
             claims = docs / "70-metadata" / "modules" / "demo" / "verification" / "claims.yaml"
             claims.write_text(
                 "- id: CL-DEMO-001\n"
+                "  state: verified\n"
+                "  statement: The system supports the demo flow.\n"
+                "  owner: demo-team\n"
+                "  evidence:\n"
+                "    - 30-modules/demo.md#主流程摘要\n"
                 "  doc_refs:\n"
                 "    - ref: 30-modules/demo.md\n"
+                "      role: primary\n"
                 "      owner: alice\n",
                 encoding="utf-8",
             )
             errors = lint_knowledge(docs)
-            self.assertTrue(any("nested mapping" in error for error in errors), errors)
+            self.assertFalse(any("anchor/alias" in error for error in errors), errors)
+            self.assertFalse(any("block scalar" in error for error in errors), errors)
+            self.assertFalse(any("nested mapping" in error for error in errors), errors)
 
 
 if __name__ == "__main__":

@@ -34,19 +34,16 @@ _ANCHOR_ALIAS_RE = re.compile(
 )
 # Block scalar indicators at end of a value line: "|", "|2", "|+", ">-", ">".
 _BLOCK_SCALAR_RE = re.compile(r"[|>](?:[1-9][0-9]*|[+-])?\s*$")
-# Keys this hand-rolled parser understands; anything else that carries a
-# "key: value" on an indented line is treated as an unsupported nested mapping.
-_KNOWN_KEYS = ("id", "document", "documents", "doc_refs", "ref", "role")
-
-
 def detect_unsupported_yaml(line: str) -> Optional[str]:
     """Return an error string if ``line`` uses YAML syntax this parser ignores.
 
     Returns ``None`` when the line is plain. Detection is intentionally
     conservative to avoid false positives on existing legal usage: URLs,
-    markdown links, inline ``[a, b]`` lists, flow ``{...}`` mappings, and the
-    known ``id``/``document``/``documents``/``doc_refs``/``ref``/``role`` keys
-    are all allowed.
+    markdown links, inline ``[a, b]`` lists, flow ``{...}`` mappings, and
+    ordinary scalar fields — including unparsed ``key: value`` on indented
+    lines (e.g. ``state``/``statement``/``owner``/``evidence`` in a claims
+    item). Only constructs the hand-rolled parsers cannot safely interpret
+    (anchors, aliases, block scalars) fail closed.
     """
     stripped = line.strip()
     if not stripped or stripped.startswith("#"):
@@ -57,13 +54,6 @@ def detect_unsupported_yaml(line: str) -> Optional[str]:
         return "unsupported YAML anchor/alias"
     if _BLOCK_SCALAR_RE.search(value):
         return "unsupported YAML block scalar"
-    # Nested mapping: only on indented continuation lines (a value's scalar
-    # being followed by a nested "key: value"). Top-level keys and list items
-    # are the legal usage this parser handles.
-    if line[:1].isspace() and not value.startswith("- ") and not value.startswith("{"):
-        match = re.match(r"^(?P<key>[^:]+)\s*:\s*", value)
-        if match and match.group("key").strip() not in _KNOWN_KEYS:
-            return "unsupported YAML nested mapping"
     return None
 
 
