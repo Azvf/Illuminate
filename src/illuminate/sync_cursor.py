@@ -143,14 +143,36 @@ def _desired_commands(exposed: Set[str]) -> Dict[str, str]:
     }
 
 
-def _preflight_target_paths(repo_root: Path, agents_compat: bool) -> None:
-    """Verify every target Illuminate will create/write under repo_root is
-    writable (or creatable), including an already-existing target file itself
-    (not just its parent directory). Fails closed before any write."""
-    artifacts = [_SKILLS_DIR, _COMMANDS_DIR, _LOCK_DIR]
-    artifacts.append("AGENTS.md" if agents_compat else _RULES_REL)
+def _preflight_target_paths(repo_root: Path, agents_compat: bool) -> List[str]:
+    """Verify every target Illuminate may create/write/delete under repo_root
+    is writable (or creatable), including an already-existing target file itself
+    (not just its parent directory). Fails closed before any write.
+
+    Both modes' artifacts are probed unconditionally, because a mode switch
+    touches the other mode's artifact: switching to default deletes the old
+    AGENTS.md block, and switching to compat deletes the old core.mdc. Probing
+    both keeps every failure in preflight, before any write happens.
+
+    `agents_compat` (the target mode) is retained for API stability; it no
+    longer changes the probe set since either switch direction may reach either
+    artifact. Returns the probed artifact paths (both modes).
+
+    The lock file itself is probed (not just its directory): on a second sync
+    or a mode switch the lock already exists and is written in Phase 2, so a
+    read-only lock must fail closed before any write. On a first sync the lock
+    does not yet exist, so the probe falls back to the nearest existing
+    ancestor (_LOCK_DIR)."""
+    artifacts = [
+        _SKILLS_DIR,
+        _COMMANDS_DIR,
+        _LOCK_DIR,
+        f"{_LOCK_DIR}/{_LOCK_FILE}",
+        "AGENTS.md",
+        _RULES_REL,
+    ]
     for rel in artifacts:
         ensure_writable(repo_root / rel)
+    return artifacts
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +251,49 @@ def _write_lock(
 
 
 # ---------------------------------------------------------------------------
+# Mode-switch cleanup
+# ---------------------------------------------------------------------------
+
+def _remove_old_rules_mdc(repo_root: Path, lock: dict) -> None:
+    """Remove the default-mode core.mdc when switching to compat mode.
+
+    Only deletes a file we previously wrote: the current file must be
+    byte-identical to the lock-recorded rules_md_hash. A core.mdc created or
+    modified by the user is never deleted. If the file cannot be deleted the
+    new mode is already written, so we raise to surface the incomplete cleanup
+    (a mode switch has happened; only the stale artifact removal is pending).
+    """
+    rules_path = repo_root / _RULES_DIR / _RULES_FILE
+    if not rules_path.exists():
+        return
+    prev_hash = lock.get("rules_md_hash")
+    if not prev_hash or hash_file(rules_path) != prev_hash:
+        return
+    try:
+        rules_path.unlink()
+    except OSError:
+        raise ValueError(f"Cannot remove old rules file: {_RULES_REL}")
+
+
+def _remove_old_agents_block(repo_root: Path, lock: dict) -> None:
+    """Remove the compat-mode AGENTS.md block when switching to default mode.
+
+    Only removes a block we previously wrote: the current AGENTS.md must be
+    byte-identical to the lock-recorded agents_md_hash. A block modified or
+    written by Codex or the user is never deleted.
+    """
+    prev_agents_hash = lock.get("agents_md_hash")
+    if not prev_agents_hash:
+        return
+    agents_path = repo_root / "AGENTS.md"
+    if agents_path.exists() and hash_file(agents_path) == prev_agents_hash:
+        content = agents_path.read_text(encoding="utf-8")
+        new_content = remove_block(content)
+        if new_content != content:
+            agents_path.write_text(new_content, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # Main sync entry point
 # ---------------------------------------------------------------------------
 
@@ -287,7 +352,12 @@ def sync_cursor(
     )
     _preflight_target_paths(repo_root, agents_compat)
 
-    # 4. Phase 2 — write.
+    # 4. Phase 2 — write. The rules artifact is handled as a mode transaction:
+    #    write the new-mode artifact first, then clean the old-mode artifact.
+    #    This ordering guarantees the new mode is never left half-written:
+    #    if old-artifact cleanup fails, the new mode is already effective and
+    #    we raise to surface the incomplete cleanup rather than risk leaving
+    #    both modes' artifacts unowned.
     skill_hashes = sync_managed_skill_tree(
         pack_dir,
         repo_root / _SKILLS_DIR,
@@ -300,25 +370,17 @@ def sync_cursor(
     # Write the rules artifact (dedicated .mdc, or AGENTS.md in compat mode).
     block_text = build_agents_block(pack_dir, manifest, exposed)
     if agents_compat:
+        # New mode = AGENTS.md block. Write it, then remove the old core.mdc.
         agents_path = repo_root / "AGENTS.md"
         new_content, modified = merge_block(agents_path, block_text)
         agents_path.write_text(new_content, encoding="utf-8")
         rules_artifact_hash = hash_file(agents_path)
+        _remove_old_rules_mdc(repo_root, lock)
     else:
-        # Switching from agents_compat to default: remove the AGENTS.md block
+        # New mode = core.mdc. Write it, then remove the old AGENTS.md block
         # we previously wrote, but only if it is still byte-identical to the
         # lock-recorded hash (never delete a block that Codex or the user has
         # since modified).
-        prev_agents_hash = lock.get("agents_md_hash")
-        if prev_agents_hash:
-            agents_path = repo_root / "AGENTS.md"
-            if (
-                agents_path.exists()
-                and hash_file(agents_path) == prev_agents_hash
-            ):
-                new_content = remove_block(agents_path.read_text(encoding="utf-8"))
-                agents_path.write_text(new_content, encoding="utf-8")
-
         rules_path = repo_root / _RULES_DIR / _RULES_FILE
         rules_path.parent.mkdir(parents=True, exist_ok=True)
         new_mdc = _build_rules_mdc(block_text, "Illuminate governance rules")
@@ -326,6 +388,7 @@ def sync_cursor(
         modified = (new_mdc != old_mdc)
         rules_path.write_text(new_mdc, encoding="utf-8")
         rules_artifact_hash = hash_file(rules_path)
+        _remove_old_agents_block(repo_root, lock)
 
     # Write lock
     _write_lock(

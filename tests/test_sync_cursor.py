@@ -945,6 +945,286 @@ class TestSyncCursor(unittest.TestCase):
         ok, issues = check_sync(CORE_PACK, repo)
         self.assertTrue(ok, f"Check should pass after compat->default: {issues}")
 
+    # ── Mode-switch transaction: idempotence across both modes ──
+
+    def test_sync_default_to_default_idempotent(self):
+        """Two default syncs leave a single core.mdc, no AGENTS.md residue, and
+        an unchanged rules_md_hash."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+
+        sync_cursor(CORE_PACK, repo)
+        first_lock = json.loads(
+            (repo / ".illuminate" / "cursor-lock.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue((repo / _RULES_REL).exists())
+
+        result = sync_cursor(CORE_PACK, repo)
+
+        self.assertTrue((repo / _RULES_REL).exists())
+        # No AGENTS.md illuminate residue in default mode.
+        self.assertNotIn(_BEGIN_MARKER, agents_path.read_text(encoding="utf-8"))
+        self.assertFalse(result["rules_modified"], "Second default sync is a no-op")
+        second_lock = json.loads(
+            (repo / ".illuminate" / "cursor-lock.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(first_lock["rules_md_hash"], second_lock["rules_md_hash"])
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertTrue(ok, f"Check should pass: {issues}")
+
+    def test_sync_compat_to_compat_idempotent(self):
+        """Two compat syncs keep a single AGENTS.md block and no core.mdc."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+        content = agents_path.read_text(encoding="utf-8")
+        self.assertEqual(content.count(_BEGIN_MARKER), 1)
+        first_lock = json.loads(
+            (repo / ".illuminate" / "cursor-lock.json").read_text(encoding="utf-8")
+        )
+
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+
+        # Block still unique; no core.mdc appears in compat mode.
+        content = agents_path.read_text(encoding="utf-8")
+        self.assertEqual(content.count(_BEGIN_MARKER), 1)
+        self.assertFalse((repo / _RULES_REL).exists())
+        second_lock = json.loads(
+            (repo / ".illuminate" / "cursor-lock.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(first_lock["agents_md_hash"], second_lock["agents_md_hash"])
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertTrue(ok, f"Check should pass: {issues}")
+
+    # ── Mode-switch transaction: default -> compat ──
+
+    def test_sync_default_to_compat_removes_old_mdc(self):
+        """Switching from default to compat must delete the old core.mdc and
+        stop the lock from claiming it."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo)
+        self.assertTrue((repo / _RULES_REL).exists())
+        old_lock = json.loads(
+            (repo / ".illuminate" / "cursor-lock.json").read_text(encoding="utf-8")
+        )
+        self.assertIn(_RULES_REL, old_lock["managed_artifacts"])
+        self.assertFalse(old_lock["agents_compat"])
+
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+
+        # AGENTS.md now carries the block; old core.mdc is removed.
+        self.assertIn(_BEGIN_MARKER, agents_path.read_text(encoding="utf-8"))
+        self.assertFalse(
+            (repo / _RULES_REL).exists(),
+            "Old core.mdc must be removed when switching to compat mode",
+        )
+        new_lock = json.loads(
+            (repo / ".illuminate" / "cursor-lock.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(new_lock["agents_compat"])
+        self.assertIn("agents_md_hash", new_lock)
+        self.assertNotIn("rules_md_hash", new_lock)
+        # Lock no longer claims the removed core.mdc.
+        self.assertNotIn(_RULES_REL, new_lock["managed_artifacts"])
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertTrue(ok, f"Check should pass after default->compat: {issues}")
+
+    # ── Mode-switch transaction: compat -> default ──
+
+    def test_sync_compat_to_default_removes_agents_block(self):
+        """Switching from compat to default must remove the AGENTS.md block and
+        record the new core.mdc hash in the lock."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+        self.assertIn(_BEGIN_MARKER, agents_path.read_text(encoding="utf-8"))
+        old_lock = json.loads(
+            (repo / ".illuminate" / "cursor-lock.json").read_text(encoding="utf-8")
+        )
+        self.assertIn("AGENTS.md", old_lock["managed_artifacts"])
+
+        sync_cursor(CORE_PACK, repo)
+
+        # core.mdc exists; AGENTS.md no longer carries an illuminate block.
+        self.assertTrue((repo / _RULES_REL).exists())
+        content = agents_path.read_text(encoding="utf-8")
+        self.assertNotIn(_BEGIN_MARKER, content)
+        self.assertIn("# Project", content)
+        new_lock = json.loads(
+            (repo / ".illuminate" / "cursor-lock.json").read_text(encoding="utf-8")
+        )
+        self.assertFalse(new_lock["agents_compat"])
+        self.assertIn("rules_md_hash", new_lock)
+        self.assertNotIn("agents_md_hash", new_lock)
+        # Lock claims the new core.mdc, not AGENTS.md.
+        self.assertIn(_RULES_REL, new_lock["managed_artifacts"])
+        self.assertNotIn("AGENTS.md", new_lock["managed_artifacts"])
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertTrue(ok, f"Check should pass after compat->default: {issues}")
+
+    # ── Mode-switch transaction: readonly AGENTS.md fails before any write ──
+
+    def test_sync_compat_to_default_preserves_untouched_agents_when_readonly(self):
+        """When switching compat->default with a read-only AGENTS.md that holds
+        our block, the sync must fail in preflight so no new-mode artifact
+        (core.mdc), lock update, or skill/command write happens (all failures
+        happen before any write). Pre-existing compat-mode skills/commands must
+        remain byte-identical."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+        self.assertIn(_BEGIN_MARKER, agents_path.read_text(encoding="utf-8"))
+        lock_before = json.loads(
+            (repo / ".illuminate" / "cursor-lock.json").read_text(encoding="utf-8")
+        )
+        skill_before = (repo / ".cursor" / "skills" / "layer-debug" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        cmd_before = (repo / ".cursor" / "commands" / "record-knowledge.md").read_text(
+            encoding="utf-8"
+        )
+        _set_readonly(agents_path)
+        try:
+            with self.assertRaises(ValueError):
+                sync_cursor(CORE_PACK, repo)
+            # Fail-before-write: the new-mode core.mdc was never written.
+            self.assertFalse(
+                (repo / _RULES_REL).exists(),
+                "core.mdc must not be written when AGENTS.md cannot be cleaned",
+            )
+            # Pre-existing compat-mode skills/commands are untouched.
+            self.assertEqual(
+                (repo / ".cursor" / "skills" / "layer-debug" / "SKILL.md").read_text(
+                    encoding="utf-8"
+                ),
+                skill_before,
+                "Skill must be unchanged by a failed compat->default switch",
+            )
+            self.assertEqual(
+                (repo / ".cursor" / "commands" / "record-knowledge.md").read_text(
+                    encoding="utf-8"
+                ),
+                cmd_before,
+                "Command must be unchanged by a failed compat->default switch",
+            )
+            # Lock still records the old compat mode (not flipped to default).
+            lock_after = json.loads(
+                (repo / ".illuminate" / "cursor-lock.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(lock_after, lock_before)
+            # AGENTS.md itself is untouched.
+            self.assertIn(
+                _BEGIN_MARKER, agents_path.read_text(encoding="utf-8"),
+                "AGENTS.md must remain untouched on a failed compat->default switch",
+            )
+        finally:
+            _make_writable(agents_path)
+
+    # ── Mode-switch transaction: readonly lock fails before any write (P0) ──
+
+    def test_sync_default_to_compat_lock_readonly_blocks_switch_fail_before_write(self):
+        """When switching default->compat with a read-only cursor-lock.json, the
+        sync must fail in preflight before any write: AGENTS.md gains no block,
+        core.mdc survives, the lock bytes are unchanged, and no new skill/command
+        artifact appears. This closes the gap where a read-only lock previously
+        let Phase 2 half-write (AGENTS.md written, core.mdc deleted, lock still
+        pointing at the old mode), leaving check_sync to misreport."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo)  # default mode
+        self.assertTrue((repo / _RULES_REL).exists())
+        lock_before = (repo / ".illuminate" / "cursor-lock.json").read_bytes()
+        _set_readonly(repo / ".illuminate" / "cursor-lock.json")
+        try:
+            with self.assertRaises(ValueError):
+                sync_cursor(CORE_PACK, repo, agents_compat=True)
+            # Fail-before-write: AGENTS.md never gained an illuminate block.
+            self.assertNotIn(
+                _BEGIN_MARKER, agents_path.read_text(encoding="utf-8"),
+                "AGENTS.md must not be written when the lock cannot be updated",
+            )
+            # Old core.mdc is untouched (not deleted by a half-completed switch).
+            self.assertTrue(
+                (repo / _RULES_REL).exists(),
+                "core.mdc must survive a failed default->compat switch",
+            )
+            # Lock bytes are byte-identical (no partial lock write).
+            self.assertEqual(
+                (repo / ".illuminate" / "cursor-lock.json").read_bytes(),
+                lock_before,
+                "Lock must be unchanged by a failed default->compat switch",
+            )
+            # No new skill/command artifact appears from the failed switch.
+            self.assertTrue(
+                (repo / ".cursor" / "skills" / "layer-debug" / "SKILL.md").exists(),
+                "Existing skill must survive the failed switch",
+            )
+        finally:
+            _make_writable(repo / ".illuminate" / "cursor-lock.json")
+
+    def test_sync_compat_to_default_lock_readonly_blocks_switch_fail_before_write(self):
+        """The reverse direction: switching compat->default with a read-only
+        lock must also fail closed before any write, leaving core.mdc absent,
+        AGENTS.md with its block intact, the lock bytes unchanged, and no new
+        skill/command artifact written."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo, agents_compat=True)  # compat mode
+        self.assertIn(_BEGIN_MARKER, agents_path.read_text(encoding="utf-8"))
+        lock_before = (repo / ".illuminate" / "cursor-lock.json").read_bytes()
+        skill_before = (repo / ".cursor" / "skills" / "layer-debug" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        cmd_before = (repo / ".cursor" / "commands" / "record-knowledge.md").read_text(
+            encoding="utf-8"
+        )
+        _set_readonly(repo / ".illuminate" / "cursor-lock.json")
+        try:
+            with self.assertRaises(ValueError):
+                sync_cursor(CORE_PACK, repo)
+            # Fail-before-write: the new-mode core.mdc was never written.
+            self.assertFalse(
+                (repo / _RULES_REL).exists(),
+                "core.mdc must not be written when the lock cannot be updated",
+            )
+            # AGENTS.md block is untouched (not removed by a half-completed switch).
+            self.assertIn(
+                _BEGIN_MARKER, agents_path.read_text(encoding="utf-8"),
+                "AGENTS.md block must survive a failed compat->default switch",
+            )
+            # Lock bytes are byte-identical.
+            self.assertEqual(
+                (repo / ".illuminate" / "cursor-lock.json").read_bytes(),
+                lock_before,
+                "Lock must be unchanged by a failed compat->default switch",
+            )
+            # Pre-existing skills/commands are byte-identical.
+            self.assertEqual(
+                (repo / ".cursor" / "skills" / "layer-debug" / "SKILL.md").read_text(
+                    encoding="utf-8"
+                ),
+                skill_before,
+                "Skill must be unchanged by a failed compat->default switch",
+            )
+            self.assertEqual(
+                (repo / ".cursor" / "commands" / "record-knowledge.md").read_text(
+                    encoding="utf-8"
+                ),
+                cmd_before,
+                "Command must be unchanged by a failed compat->default switch",
+            )
+        finally:
+            _make_writable(repo / ".illuminate" / "cursor-lock.json")
+
 
 class TestCursorCli(unittest.TestCase):
     """Minimal CLI routing coverage for the cursor sync branch."""
