@@ -181,10 +181,21 @@ def test_mermaid_single_quoted_label_escape():
 
 
 def test_mermaid_long_label():
-    block = ['flowchart LR', 'A["这是一个非常非常长的节点标签，超过六十字符限制用于测试长标签检测功能是否正常触发"]']
+    # 标签长度 > 60 阈值（约 72 字符，保留中文以覆盖非 ASCII 场景），应触发 MERMAID-LONG-LABEL
+    block = ['flowchart LR', 'A["这是一个非常非常长的节点标签，超过六十字符限制用于测试长标签检测功能是否正常触发这是一个非常非常长的节点标签，超过六十字符限制用于测试长标签检测"]']
     text = '\n'.join(block)
     _, _, long_labels = scan_mermaid_blocks([(1, text)])
     assert len(long_labels) == 1
+
+
+def test_mermaid_long_label_boundary():
+    """边界：MAX_LABEL_LEN=60 用 > 判定，60 字符不触发、61 字符触发。"""
+    label_60 = '长' * 60
+    label_61 = '长' * 61
+    _, _, long_60 = scan_mermaid_blocks([(1, f'A["{label_60}"]')])
+    _, _, long_61 = scan_mermaid_blocks([(1, f'A["{label_61}"]')])
+    assert long_60 == []
+    assert len(long_61) == 1
 
 
 def test_mermaid_clean_block():
