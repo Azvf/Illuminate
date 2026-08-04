@@ -17,6 +17,10 @@ Commands:
     illuminate knowledge pull --repo <path> [--store <dir>] [--manifest <json>]
     illuminate knowledge status --repo <path> [--store <dir>] [--manifest <json>]
     illuminate knowledge push --repo <path> [--store <dir>] [--manifest <json>] [--force]
+    illuminate knowledge candidate --repo <path> --source <path> --target <kind> [--anchor <ref>] [--notes <text>] [--store <dir>]
+    illuminate knowledge review --repo <path> --id <id> [--reviewer <name>] [--notes <text>] [--store <dir>]
+    illuminate knowledge promote --repo <path> --id <id> --pack <dir> [--target-path <path>] [--content <path>] [--dry-run] [--force] [--store <dir>]
+    illuminate knowledge reject --repo <path> --id <id> [--reviewer <name>] [--superseded] [--notes <text>] [--store <dir>]
     illuminate docs export-human --source <dir> --output <dir> [--config <json>]
     illuminate docs lint-human --source <dir> [--config <json>] [--all-markdown]
     illuminate docs lint-knowledge --source <dir> [--config <json>]
@@ -38,6 +42,13 @@ from .compat import compat_generate, compat_check
 from .sync_codex import sync_codex, check_sync as check_codex_sync, clean_sync as clean_codex_sync
 from .sync_codebuddy import sync_codebuddy, check_sync as check_codebuddy_sync, clean_sync as clean_codebuddy_sync
 from .knowledge_store import knowledge_pull, knowledge_status, knowledge_push
+from .promotion import (
+    PromotionError,
+    knowledge_candidate,
+    knowledge_review,
+    knowledge_promote,
+    knowledge_reject,
+)
 from .docs_export import export_human, DocsExportError
 from .docs_lint import format_lint_errors, lint_human
 from .knowledge_lint import format_knowledge_lint_errors, lint_knowledge
@@ -130,6 +141,7 @@ def _build_parser():
     scb.add_argument("--skill", action="append", default=None,
                      help="Skill ID to sync (repeatable; default: all non-alias)")
 
+
     sch = ps.add_parser("check", help="Verify sync integrity for Codex or CodeBuddy")
     sch.add_argument("--pack", default="packs/core", help="Pack directory path")
     sch.add_argument("--repo", required=True, help="Target repository path")
@@ -160,6 +172,40 @@ def _build_parser():
     kpush.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
     kpush.add_argument("--manifest", default=None, help="Knowledge manifest JSON path")
     kpush.add_argument("--force", action="store_true", help="Override conflicts")
+
+    kc = ps.add_parser("candidate", help="Create a promotion candidate from a knowledge source")
+    kc.add_argument("--repo", required=True, help="Target repository path")
+    kc.add_argument("--source", required=True, help="Source knowledge path relative to repo/docs/")
+    kc.add_argument("--target", required=True, choices=["policy", "skill", "reference", "evidence"],
+                    help="Target pack content kind")
+    kc.add_argument("--anchor", default=None, help="Anchor reference for the candidate")
+    kc.add_argument("--notes", default=None, help="Free-form notes for the candidate")
+    kc.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
+
+    kr = ps.add_parser("review", help="Record a review verdict for a candidate")
+    kr.add_argument("--repo", required=True, help="Target repository path")
+    kr.add_argument("--id", required=True, help="Candidate ID")
+    kr.add_argument("--reviewer", default=None, help="Reviewer name")
+    kr.add_argument("--notes", default=None, help="Review notes")
+    kr.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
+
+    kpm = ps.add_parser("promote", help="Promote a reviewed candidate into a pack")
+    kpm.add_argument("--repo", required=True, help="Target repository path")
+    kpm.add_argument("--id", required=True, help="Candidate ID")
+    kpm.add_argument("--pack", required=True, help="Pack directory to promote into")
+    kpm.add_argument("--target-path", default=None, help="Pack-relative target path (default: <kind>s/<source path>)")
+    kpm.add_argument("--content", default=None, help="Generalized content file path (CWD-relative; default: candidate source doc)")
+    kpm.add_argument("--dry-run", action="store_true", help="Print the promotion plan without writing")
+    kpm.add_argument("--force", action="store_true", help="Overwrite an existing pack file")
+    kpm.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
+
+    krj = ps.add_parser("reject", help="Reject a candidate (optionally superseded)")
+    krj.add_argument("--repo", required=True, help="Target repository path")
+    krj.add_argument("--id", required=True, help="Candidate ID")
+    krj.add_argument("--reviewer", default=None, help="Reviewer name")
+    krj.add_argument("--superseded", action="store_true", help="Mark the candidate as superseded")
+    krj.add_argument("--notes", default=None, help="Rejection notes")
+    krj.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
 
     # docs export-human / lint-human
     p = sub.add_parser("docs", help="Documentation operations")
@@ -465,6 +511,7 @@ def _cmd_sync_codebuddy(args):
     return 0
 
 
+
 def _cmd_sync_check(args):
     pack_dir = Path(args.pack).resolve()
     repo = Path(args.repo).resolve()
@@ -654,6 +701,133 @@ def _cmd_knowledge_push(args):
     return 0
 
 
+def _cmd_knowledge_candidate(args):
+    repo = Path(args.repo).resolve()
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+    store = Path(args.store) if args.store else None
+
+    try:
+        result = knowledge_candidate(
+            repo,
+            args.source,
+            args.target,
+            store=store,
+            anchor=args.anchor,
+            notes=args.notes,
+        )
+    except PromotionError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Knowledge candidate: CREATED", file=sys.stderr)
+    print(f"  Candidate:{result.get('id')}", file=sys.stderr)
+    print(f"  Status:   {result.get('status')}", file=sys.stderr)
+    return 0
+
+
+def _cmd_knowledge_review(args):
+    repo = Path(args.repo).resolve()
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+    store = Path(args.store) if args.store else None
+
+    try:
+        result = knowledge_review(
+            repo,
+            args.id,
+            store=store,
+            reviewer=args.reviewer,
+            notes=args.notes,
+        )
+    except PromotionError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Knowledge review: RECORDED", file=sys.stderr)
+    print(f"  Candidate:{result.get('id')}", file=sys.stderr)
+    print(f"  Status:   {result.get('status')}", file=sys.stderr)
+    return 0
+
+
+def _cmd_knowledge_promote(args):
+    repo = Path(args.repo).resolve()
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+    pack_dir = Path(args.pack).resolve()
+    if not pack_dir.exists():
+        print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
+        return 1
+    store = Path(args.store) if args.store else None
+    content_path = Path(args.content).resolve() if args.content else None
+
+    try:
+        result = knowledge_promote(
+            repo,
+            args.id,
+            pack_dir,
+            store=store,
+            target_path=args.target_path,
+            content_path=content_path,
+            dry_run=args.dry_run,
+            force=args.force,
+        )
+    except PromotionError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if args.dry_run:
+        print(f"Knowledge promote: PLAN (dry-run)", file=sys.stderr)
+    else:
+        print(f"Knowledge promote: COMPLETE", file=sys.stderr)
+    print(f"  Candidate:{result.get('candidate_id')}", file=sys.stderr)
+    print(f"  Pack:     v{result.get('pack_version')}", file=sys.stderr)
+    print(f"  Written:  {result.get('written')}", file=sys.stderr)
+    print(f"  Status:   {result.get('status')}", file=sys.stderr)
+    return 0
+
+
+def _cmd_knowledge_reject(args):
+    repo = Path(args.repo).resolve()
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+    store = Path(args.store) if args.store else None
+
+    try:
+        result = knowledge_reject(
+            repo,
+            args.id,
+            store=store,
+            reviewer=args.reviewer,
+            supersede=args.superseded,
+            notes=args.notes,
+        )
+    except PromotionError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Knowledge reject: COMPLETE", file=sys.stderr)
+    print(f"  Candidate:{result.get('id')}", file=sys.stderr)
+    print(f"  Status:   {result.get('status')}", file=sys.stderr)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Main dispatch
 # ---------------------------------------------------------------------------
@@ -675,6 +849,10 @@ _DISPATCH = {
     ("knowledge", "pull"): _cmd_knowledge_pull,
     ("knowledge", "status"): _cmd_knowledge_status,
     ("knowledge", "push"): _cmd_knowledge_push,
+    ("knowledge", "candidate"): _cmd_knowledge_candidate,
+    ("knowledge", "review"): _cmd_knowledge_review,
+    ("knowledge", "promote"): _cmd_knowledge_promote,
+    ("knowledge", "reject"): _cmd_knowledge_reject,
     ("docs", "export-human"): _cmd_docs_export_human,
     ("docs", "lint-human"): _cmd_docs_lint_human,
     ("docs", "lint-knowledge"): _cmd_docs_lint_knowledge,

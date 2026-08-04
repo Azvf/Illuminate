@@ -89,6 +89,10 @@ Keep human-readable Markdown as the source truth and store claims, evidence, and
 | `illuminate knowledge pull --repo <path> [--store <dir>] [--manifest <json>]` | Pull configured project knowledge to central store |
 | `illuminate knowledge status --repo <path> [--store <dir>] [--manifest <json>]` | Compare configured project knowledge with central store |
 | `illuminate knowledge push --repo <path> [--store <dir>] [--manifest <json>] [--force]` | Push store documents back to project safely |
+| `illuminate knowledge candidate --repo <path> --source <path> --target <kind> [--anchor <ref>] [--notes <text>] [--store <dir>]` | Create a promotion candidate from a knowledge source with provenance |
+| `illuminate knowledge review --repo <path> --id <id> [--reviewer <name>] [--notes <text>] [--store <dir>]` | Move a candidate from `raw` to `reviewed` |
+| `illuminate knowledge promote --repo <path> --id <id> --pack <dir> [--target-path <path>] [--content <file>] [--dry-run] [--force] [--store <dir>]` | Promote a reviewed candidate into the Harness Pack (generalized via `--content`) |
+| `illuminate knowledge reject --repo <path> --id <id> [--reviewer <name>] [--superseded] [--notes <text>] [--store <dir>]` | Reject a `raw`/`reviewed` candidate or mark a promoted one `superseded` |
 | `illuminate docs lint-knowledge --source <dir> [--config <json>]` | Validate Manifest owners, metadata IDs, and YAML `doc_refs` |
 
 ### Skill Selection
@@ -190,3 +194,24 @@ illuminate docs lint-knowledge --source /path/to/project/docs
 ```
 
 Pull keeps the previous three-way baseline for conflicts and deletions. Push refuses to overwrite a project file that changed since the last baseline unless `--force` is supplied.
+
+### Knowledge Promotion Bridge
+
+Knowledge Promotion Bridge is a thin bridge between the Store (backup tool) and the Harness Pack (Git-versioned, reviewed general knowledge). The Store still only handles backup/diff/conflict/restore; it does not perform cross-project generalization or publishing.
+
+Promotion state follows `raw → reviewed → promoted`, with `raw`/`reviewed → rejected` and `promoted → superseded`; generalized content has no separate state and is supplied via `--content` at promote time. The registry lives at `<store>/projects/<project-id>/promotions.json` (beside `knowledge-lock.json`), with generalized content stored under `promotions/<id>.md`.
+
+The four commands:
+- `candidate` captures a source document with provenance (git remote, commit, docs-relative path, anchor).
+- `review` marks a candidate `reviewed`.
+- `promote` writes content into a Harness Pack (`<pack>/policies|skills|references|evidence/`), records the pack.json version and the written path; refuses to overwrite an existing pack file unless `--force`; `--dry-run` writes nothing.
+- `reject` marks a `raw`/`reviewed` candidate `rejected`; with `--superseded` it marks a `promoted` candidate `superseded`.
+
+Promotion does not stage or commit. `promote` only writes into the Pack working tree; commits and PRs are left to Git and humans.
+
+```bash
+illuminate knowledge candidate --repo /path/to/project --source 30-modules/hot-update.md --target reference
+illuminate knowledge review --repo /path/to/project --id <candidate-id> --reviewer alice
+illuminate knowledge promote --repo /path/to/project --id <candidate-id> --pack packs/core --content generalized.md
+illuminate knowledge reject --repo /path/to/project --id <candidate-id>
+```
