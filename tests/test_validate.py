@@ -168,5 +168,245 @@ class TestSkillFrontmatter(unittest.TestCase):
         self.assertTrue(ok, errors)
 
 
+class TestPackSemanticUniqueness(unittest.TestCase):
+    """Semantic completeness checks: id/path uniqueness and unknown top-level fields."""
+
+    def _make_pack(self, manifest, skills=None, policies=None) -> Path:
+        import tempfile
+        root = Path(tempfile.mkdtemp())
+        pack_dir = root / "pack"
+        for sid, sdir in (skills or []):
+            skill_path = pack_dir / sdir
+            skill_path.mkdir(parents=True, exist_ok=True)
+            (skill_path / "SKILL.md").write_text(
+                "---\nname: demo\ndescription: A demo skill\n---\n# Demo\n",
+                encoding="utf-8")
+            (skill_path / "contract.json").write_text(json.dumps({
+                "schema_version": 1,
+                "id": sid,
+                "version": "0.1.0",
+                "entry": "SKILL.md",
+                "kind": "skill",
+                "activation": {"mode": "explicit"},
+            }), encoding="utf-8")
+        manifest.setdefault("schema_version", 1)
+        manifest.setdefault("id", "demo.pack")
+        manifest.setdefault("version", "0.1.0")
+        manifest.setdefault("name", "demo-pack")
+        manifest.setdefault("skills", [{"id": s, "dir": d} for s, d in (skills or [])])
+        manifest.setdefault("references", [])
+        manifest.setdefault("evidence", {})
+        if policies is not None:
+            pol = pack_dir / "policies"
+            pol.mkdir(parents=True)
+            manifest.setdefault("policies", {"index": "policies/index.json"})
+            (pol / "index.json").write_text(
+                json.dumps({"schema_version": 1, "policies": policies}),
+                encoding="utf-8")
+            for p in policies:
+                pfile = pol / p["path"]
+                if not pfile.exists():
+                    pfile.write_text("# Policy\n", encoding="utf-8")
+        else:
+            pol = pack_dir / "policies"
+            pol.mkdir(parents=True)
+            manifest.setdefault("policies", {"index": "policies/index.json"})
+            (pol / "index.json").write_text(
+                json.dumps({"schema_version": 1, "policies": []}),
+                encoding="utf-8")
+        (pack_dir / "pack.json").write_text(json.dumps(manifest), encoding="utf-8")
+        return pack_dir
+
+    def test_duplicate_skill_id_fails(self):
+        pack_dir = self._make_pack({}, skills=[
+            ("demo.skill.a", "skills/a"),
+            ("demo.skill.a", "skills/b"),
+        ])
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("duplicate skill id: demo.skill.a" in e for e in errors), errors)
+
+    def test_duplicate_skill_dir_fails(self):
+        pack_dir = self._make_pack({}, skills=[
+            ("demo.skill.a", "skills/shared"),
+            ("demo.skill.b", "skills/shared"),
+        ])
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("duplicate skill dir: skills/shared" in e for e in errors), errors)
+
+    def test_duplicate_reference_id_fails(self):
+        pack_dir = self._make_pack({})
+        ref_dir = pack_dir / "references"
+        ref_dir.mkdir()
+        (ref_dir / "r.md").write_text("# R\n", encoding="utf-8")
+        (pack_dir / "pack.json").write_text(json.dumps({
+            "schema_version": 1,
+            "id": "demo.pack",
+            "version": "0.1.0",
+            "name": "demo-pack",
+            "skills": [],
+            "references": [
+                {"id": "demo.ref", "path": "references/r.md"},
+                {"id": "demo.ref", "path": "references/r.md"},
+            ],
+            "evidence": {},
+            "policies": {"index": "policies/index.json"},
+        }), encoding="utf-8")
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("duplicate reference id: demo.ref" in e for e in errors), errors)
+        self.assertTrue(any("duplicate reference path: references/r.md" in e for e in errors), errors)
+
+    def test_duplicate_policy_id_and_path_fail(self):
+        pack_dir = self._make_pack({}, policies=[
+            {"id": "demo.policy", "path": "p.md", "priority": 100},
+            {"id": "demo.policy", "path": "p.md", "priority": 200},
+        ])
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("duplicate policy id: demo.policy" in e for e in errors), errors)
+        self.assertTrue(any("duplicate policy path: p.md" in e for e in errors), errors)
+
+    def test_policy_missing_priority_or_id_fails(self):
+        pack_dir = self._make_pack({}, policies=[
+            {"id": "demo.policy", "path": "p.md", "priority": 100},
+            {"path": "q.md", "priority": 50},
+        ])
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("missing or invalid id" in e for e in errors), errors)
+
+    def test_unknown_top_level_field_fails(self):
+        pack_dir = self._make_pack({})
+        manifest = json.loads((pack_dir / "pack.json").read_text(encoding="utf-8"))
+        manifest["frobnicate"] = "nope"
+        (pack_dir / "pack.json").write_text(json.dumps(manifest), encoding="utf-8")
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("unknown top-level field: frobnicate" in e for e in errors), errors)
+
+    def _make_pack_with_skill_entries(self, skill_entries) -> Path:
+        """Build a minimal pack whose skills[] entries are given verbatim.
+
+        Unlike _make_pack, this lets a test inject a numeric id, an empty id,
+        or other malformed skill entries without assuming string ids.
+        """
+        import tempfile
+        root = Path(tempfile.mkdtemp())
+        pack_dir = root / "pack"
+        for sid, sdir in skill_entries:
+            skill_path = pack_dir / sdir
+            skill_path.mkdir(parents=True, exist_ok=True)
+            (skill_path / "SKILL.md").write_text(
+                "---\nname: demo\ndescription: A demo skill\n---\n# Demo\n",
+                encoding="utf-8")
+            cid = sid if isinstance(sid, str) else "demo"
+            (skill_path / "contract.json").write_text(json.dumps({
+                "schema_version": 1,
+                "id": cid,
+                "version": "0.1.0",
+                "entry": "SKILL.md",
+                "kind": "skill",
+                "activation": {"mode": "explicit"},
+            }), encoding="utf-8")
+        pol = pack_dir / "policies"
+        pol.mkdir(parents=True)
+        (pol / "index.json").write_text(
+            json.dumps({"schema_version": 1, "policies": []}), encoding="utf-8")
+        (pack_dir / "pack.json").write_text(json.dumps({
+            "schema_version": 1,
+            "id": "demo.pack",
+            "version": "0.1.0",
+            "name": "demo-pack",
+            "skills": skill_entries,
+            "references": [],
+            "evidence": {},
+            "policies": {"index": "policies/index.json"},
+        }), encoding="utf-8")
+        return pack_dir
+
+    def test_numeric_skill_id_reports_clean_error(self):
+        """A numeric skill id must fail cleanly, not crash on sid.split('.')."""
+        pack_dir = self._make_pack_with_skill_entries([
+            {"id": 5, "dir": "skills/demo"},
+        ])
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("id must be a string" in e for e in errors), errors)
+
+    def test_empty_skill_id_reports_clean_error(self):
+        """An empty skill id follows the existing missing-id path, no crash."""
+        pack_dir = self._make_pack_with_skill_entries([
+            {"id": "", "dir": "skills/demo"},
+        ])
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("missing id" in e for e in errors), errors)
+
+    def test_policy_boolean_priority_fails(self):
+        """priority: true/false must not silently pass the int check."""
+        pack_dir = self._make_pack({}, policies=[
+            {"id": "demo.policy", "path": "p.md", "priority": True},
+        ])
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("invalid priority" in e for e in errors), errors)
+
+    def test_dot_slash_reference_path_detected_as_duplicate(self):
+        """references/./r.md and references/r.md are the same file."""
+        pack_dir = self._make_pack({})
+        ref_dir = pack_dir / "references"
+        ref_dir.mkdir()
+        (ref_dir / "r.md").write_text("# R\n", encoding="utf-8")
+        (pack_dir / "pack.json").write_text(json.dumps({
+            "schema_version": 1,
+            "id": "demo.pack",
+            "version": "0.1.0",
+            "name": "demo-pack",
+            "skills": [],
+            "references": [
+                {"id": "demo.ref.a", "path": "references/./r.md"},
+                {"id": "demo.ref.b", "path": "references/r.md"},
+            ],
+            "evidence": {},
+            "policies": {"index": "policies/index.json"},
+        }), encoding="utf-8")
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(ok)
+        self.assertTrue(any("duplicate reference path" in e for e in errors), errors)
+
+    def test_case_different_reference_paths_not_duplicate(self):
+        """Case differences (R.md vs r.md) are NOT duplicates on Linux."""
+        pack_dir = self._make_pack({})
+        ref_dir = pack_dir / "references"
+        ref_dir.mkdir()
+        (ref_dir / "r.md").write_text("# R\n", encoding="utf-8")
+        (pack_dir / "pack.json").write_text(json.dumps({
+            "schema_version": 1,
+            "id": "demo.pack",
+            "version": "0.1.0",
+            "name": "demo-pack",
+            "skills": [],
+            "references": [
+                {"id": "demo.ref.a", "path": "references/r.md"},
+                {"id": "demo.ref.b", "path": "references/R.md"},
+            ],
+            "evidence": {},
+            "policies": {"index": "policies/index.json"},
+        }), encoding="utf-8")
+        ok, errors = validate_pack(pack_dir)
+        self.assertFalse(any("duplicate reference path" in e for e in errors), errors)
+
+    def test_legal_core_style_pack_validates(self):
+        pack_dir = self._make_pack({}, skills=[
+            ("demo.skill.a", "skills/a"),
+        ], policies=[
+            {"id": "demo.policy", "path": "p.md", "priority": 100},
+        ])
+        ok, errors = validate_pack(pack_dir)
+        self.assertTrue(ok, errors)
+
+
 if __name__ == "__main__":
     unittest.main()

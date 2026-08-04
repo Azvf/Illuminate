@@ -91,15 +91,36 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
         if field not in manifest:
             errors.append(f"[{pack_id}] manifest missing required field: {field}")
 
+    # 2b. Reject unknown top-level fields. The pack schema has no
+    #     additionalProperties:false, so unknown fields pass schema; enforce
+    #     the known set here. Source of truth is the schema's properties keys,
+    #     which list every legal core top-level field.
+    known_fields = set()
+    pack_schema = _load_schema("pack.schema.json")
+    if pack_schema:
+        known_fields = set(pack_schema.get("properties", {}))
+    if known_fields:
+        for key in manifest:
+            if key not in known_fields:
+                errors.append(
+                    f"[{pack_id}] unknown top-level field: {key}"
+                )
+
     # 3. Validate skill entries
     skill_ids = []
+    skill_dirs = []
     for entry in manifest.get("skills", []):
         sid = entry.get("id", "")
         sdir = entry.get("dir", "")
         if not sid:
             errors.append(f"[{pack_id}] skill entry missing id: {entry}")
             continue
+        if not isinstance(sid, str):
+            errors.append(f"[{pack_id}] skill entry id must be a string: {entry!r}")
+            continue
         skill_ids.append(sid)
+        if sdir:
+            skill_dirs.append(sdir)
 
         # Check dir name matches id suffix
         expected_dir = sid.split(".")[-1] if "." in sid else sid
@@ -134,6 +155,14 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
                     errors.append(
                         f"[{pack_id}] SKILL.md for skill '{sid}' lacks non-empty '{key}'"
                     )
+
+    # 3b. Enforce skill id and dir uniqueness.
+    for sid in set(skill_ids):
+        if skill_ids.count(sid) > 1:
+            errors.append(f"[{pack_id}] duplicate skill id: {sid}")
+    for sdir in set(skill_dirs):
+        if skill_dirs.count(sdir) > 1:
+            errors.append(f"[{pack_id}] duplicate skill dir: {sdir}")
 
     # 4. Validate contracts (loaded in step 1b)
     contract_ids = []
@@ -185,10 +214,27 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
                         errors.append(f"[{pack_id}] alias cycle detected involving '{cid}'")
 
     # 5. Validate references exist
+    ref_ids = []
+    ref_paths = []
     for ref_entry in manifest.get("references", []):
+        ref_ids.append(ref_entry.get("id", ""))
+        ref_paths.append(ref_entry.get("path", ""))
         ref_path = pack_dir / ref_entry["path"]
         if not ref_path.exists():
             errors.append(f"[{pack_id}] reference not found: {ref_entry['path']}")
+
+    # 5b. Enforce reference id and path uniqueness.
+    for rid in set(ref_ids):
+        if ref_ids.count(rid) > 1:
+            errors.append(f"[{pack_id}] duplicate reference id: {rid}")
+    # Reference path comparison is normalized (backslashes -> forward
+    # slashes, leading "./" removed) so `references/./r.md` and
+    # `references/r.md` are detected as duplicates. Case is NOT normalized:
+    # on case-sensitive filesystems `R.md` and `r.md` are distinct files.
+    normalized_paths = [Path(p).as_posix() for p in ref_paths]
+    for rpath in set(ref_paths):
+        if normalized_paths.count(Path(rpath).as_posix()) > 1:
+            errors.append(f"[{pack_id}] duplicate reference path: {rpath}")
 
     # 6. Validate policy index
     try:
@@ -197,10 +243,35 @@ def validate_pack(pack_dir: Path) -> Tuple[bool, List[str]]:
         errors.append(str(e))
         policy_index = {"policies": []}
 
+    # The policy index has no schema, so validate id/path uniqueness and a
+    # light structure here. priority is an ordering weight used by
+    # get_policy_files (sorted descending); duplicate priorities are allowed
+    # and do not break ordering, so only id/path uniqueness is enforced.
+    policy_ids = []
+    policy_paths = []
     for policy in policy_index.get("policies", []):
-        policy_path = pack_dir / "policies" / policy.get("path", "")
+        pid = policy.get("id")
+        ppath = policy.get("path")
+        pprio = policy.get("priority")
+        if not isinstance(pid, str) or not pid:
+            errors.append(f"[{pack_id}] policy entry missing or invalid id: {policy}")
+        if not isinstance(ppath, str) or not ppath:
+            errors.append(f"[{pack_id}] policy entry missing or invalid path: {policy}")
+        if not isinstance(pprio, int) or isinstance(pprio, bool):
+            errors.append(f"[{pack_id}] policy entry missing or invalid priority: {policy}")
+        if isinstance(pid, str) and pid:
+            policy_ids.append(pid)
+        if isinstance(ppath, str) and ppath:
+            policy_paths.append(ppath)
+        policy_path = pack_dir / "policies" / (ppath or "")
         if not policy_path.exists():
-            errors.append(f"[{pack_id}] policy file not found: {policy.get('path')}")
+            errors.append(f"[{pack_id}] policy file not found: {ppath}")
+    for pid in set(policy_ids):
+        if policy_ids.count(pid) > 1:
+            errors.append(f"[{pack_id}] duplicate policy id: {pid}")
+    for ppath in set(policy_paths):
+        if policy_paths.count(ppath) > 1:
+            errors.append(f"[{pack_id}] duplicate policy path: {ppath}")
 
     # 7. Validate evidence config exists
     evidence_config = get_evidence_config_path(pack_dir, manifest)
