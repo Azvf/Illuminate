@@ -202,6 +202,23 @@ class TestDetectUnsupportedYaml(unittest.TestCase):
         self.assertIsNotNone(detect_unsupported_yaml("description: |2"))
         self.assertIsNotNone(detect_unsupported_yaml("notes: >-"))
 
+    def test_block_scalar_combined_indicators_are_detected(self):
+        # Combined indentation + chomping indicators are valid YAML and must
+        # fail closed (not silently pass through).
+        for line in (
+            "statement: |2-",
+            "notes: >2-",
+            "doc: |2+",
+            "notes: >2+",
+            "doc: |-",
+            "doc: |+",
+            "doc: >+",
+        ):
+            self.assertIsNotNone(
+                detect_unsupported_yaml(line),
+                f"expected {line!r} to be reported as a block scalar",
+            )
+
     def test_ordinary_indented_scalar_fields_are_clean(self):
         # Unknown indented scalar fields (e.g. claims.yaml business metadata)
         # are not a syntax error: the parser simply does not interpret them.

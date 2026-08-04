@@ -32,8 +32,9 @@ _LIST_ITEM_RE = re.compile(r"^(?P<indent>\s*)-\s+(?P<value>.*?)\s*$")
 _ANCHOR_ALIAS_RE = re.compile(
     r"(?:^|\s)&[A-Za-z_][A-Za-z0-9_-]*|\s\*[A-Za-z_][A-Za-z0-9_-]*"
 )
-# Block scalar indicators at end of a value line: "|", "|2", "|+", ">-", ">".
-_BLOCK_SCALAR_RE = re.compile(r"[|>](?:[1-9][0-9]*|[+-])?\s*$")
+# Block scalar indicators at end of a value line: "|", "|2", "|+", ">-", ">",
+# and combined indentation+chomping indicators like "|2-" or ">2+".
+_BLOCK_SCALAR_RE = re.compile(r"[|>](?:[1-9][0-9]*(?:[+-])?|[+-])?\s*$")
 def detect_unsupported_yaml(line: str) -> Optional[str]:
     """Return an error string if ``line`` uses YAML syntax this parser ignores.
 
