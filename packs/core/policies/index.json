@@ -8,6 +8,12 @@
       "strength": "mandatory"
     },
     {
+      "id": "illuminate.knowledge-routing",
+      "path": "knowledge-routing.md",
+      "priority": 950,
+      "strength": "mandatory"
+    },
+    {
       "id": "illuminate.root-cause-first",
       "path": "root-cause-first.md",
       "priority": 900,
