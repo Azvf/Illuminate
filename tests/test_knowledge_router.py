@@ -256,5 +256,29 @@ class TestKnowledgeRouter(unittest.TestCase):
         self.assertNotRegex(text, r"Related modules: \.")
 
 
+    def test_journey_path_is_directory_raises_value_error(self):
+        # _read_lines is fail-closed: a journey path that exists but is a
+        # directory must raise instead of being silently treated as "no
+        # knowledge". read_text raises IsADirectoryError (an OSError subclass),
+        # which _read_lines surfaces as ValueError.
+        repo = self._make_repo()
+        _write(
+            repo / "docs" / "70-metadata" / "modules" / "m" / "module.yaml",
+            "id: m\ndocument: 30-modules/m.md\n",
+        )
+        _write(
+            repo / "docs" / "30-modules" / "m.md",
+            "# M\n\n## Section\n",
+        )
+        # Replace the journey's md file with a directory of the same name so the
+        # glob picks it up but read_text fails.
+        journey = repo / "docs" / "40-journeys" / "bg.md"
+        _write(journey, "# Background\n")
+        journey.unlink()
+        journey.mkdir(parents=True, exist_ok=True)
+        with self.assertRaises(ValueError):
+            build_knowledge_map(repo)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -50,10 +50,15 @@ _METADATA = """
 
 
 def _read_lines(path: Path) -> List[str]:
+    """Read a knowledge source's lines, fail-closed: a missing path yields no
+    lines, but a path that exists and cannot be read raises instead of being
+    silently treated as "no knowledge"."""
+    if not path.exists():
+        return []
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
-        return []
+    except OSError as exc:
+        raise ValueError(f"Cannot read knowledge source: {path}: {exc}")
     return text.splitlines()
 
 
@@ -299,8 +304,7 @@ def _matches(req: str, keywords: List[str]) -> bool:
 
 def _first_match_id(req: str, docs: List[Dict[str, object]], key: str) -> Optional[str]:
     for d in docs:
-        keywords = d.get("keywords") or []
-        if _matches(req, keywords) or _matches(req, [str(d.get(key, ""))]):
+        if _matches(req, [str(d.get(key, ""))]):
             return d.get(key)
     return None
 
@@ -309,12 +313,16 @@ def route_read_order(request: str, knowledge_state: Dict[str, object]) -> List[s
     """Return the recommended first-round read sequence for ``request`` against
     a target repo's ``knowledge_state``.
 
-    ``knowledge_state`` uses these optional keys::
+    ``knowledge_state`` is derived from the generated Knowledge Map (see
+    ``build_knowledge_map``) and uses these keys::
 
         has_map     - bool, whether a Knowledge Map exists
-        journeys    - [{"title", "keywords", "modules": [module_id, ...]}]
-        modules     - [{"id", "keywords"}]
-        components  - [{"id", "keywords"}]
+        journeys    - [{"title", "modules": [module_id, ...]}]
+        modules     - [{"id"}]
+        components  - [{"id"}]
+
+    Matching is derived purely from map-native fields (journey ``title`` and
+    module/component ``id``); the map carries no free-form keyword list.
 
     Step kinds: ``map``, ``journey``, ``module``, ``component``, ``metadata``,
     ``docs``, ``source``.
@@ -336,9 +344,7 @@ def route_read_order(request: str, knowledge_state: Dict[str, object]) -> List[s
     # Cross-module behavior first (policy rule 3): matching Journey, then its
     # linked Modules that actually exist in the index.
     for journey in knowledge_state.get("journeys") or []:
-        if _matches(req, journey.get("keywords") or []) or _matches(
-            req, [str(journey.get("title", ""))]
-        ):
+        if _matches(req, [str(journey.get("title", ""))]):
             steps.append("journey")
             if journey.get("modules") and any(
                 mid in module_ids for mid in journey["modules"]
