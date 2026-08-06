@@ -15,7 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from .hashutil import hash_file, hash_directory, lock_hash
+from .hashutil import hash_file, hash_directory, hash_string, lock_hash
+from .knowledge_router import write_knowledge_map
 from .lockfile import build_lock_envelope
 from .managed_block import (
     BEGIN_MARKER as _BEGIN_MARKER,
@@ -26,6 +27,7 @@ from .managed_block import (
 from .resolve import resolve_pack
 from .sync_shared import (
     build_agents_block,
+    check_knowledge_map,
     check_managed_file_hashes,
     remove_empty_parent_dirs,
     sync_managed_skill_tree,
@@ -122,6 +124,7 @@ def _create_codex_lock(
     manifest: dict,
     exposed: Set[str],
     skill_files: Dict[str, List[str]],
+    knowledge_map_hash: Optional[str] = None,
 ) -> dict:
     """Create .illuminate/codex-lock.json."""
     lock_dir = repo_root / ".illuminate"
@@ -148,6 +151,17 @@ def _create_codex_lock(
 
     pack_hash = hash_directory(pack_dir)
 
+    managed_artifacts = [
+        "AGENTS.md",
+        *[
+            f".agents/skills/{entry['name']}/{rel}"
+            for entry in skill_entries
+            for rel in entry["files"]
+        ],
+    ]
+    if knowledge_map_hash is not None:
+        managed_artifacts.append(".illuminate/knowledge-map.md")
+
     lock = build_lock_envelope(
         harness="codex",
         pack={
@@ -157,14 +171,7 @@ def _create_codex_lock(
         },
         target={"path": str(repo_root)},
         selection={"skills": sorted(exposed)},
-        managed_artifacts=[
-            "AGENTS.md",
-            *[
-                f".agents/skills/{entry['name']}/{rel}"
-                for entry in skill_entries
-                for rel in entry["files"]
-            ],
-        ],
+        managed_artifacts=managed_artifacts,
         capabilities={"permissions": "declarative-only"},
     )
     lock.update({
@@ -173,6 +180,8 @@ def _create_codex_lock(
         "agents_md_hash": agents_hash,
         "skills": skill_entries,
     })
+    if knowledge_map_hash is not None:
+        lock["knowledge_map_hash"] = knowledge_map_hash
 
     lock_path = lock_dir / "codex-lock.json"
     with open(lock_path, "w", encoding="utf-8") as f:
@@ -261,8 +270,16 @@ def sync_codex(
             yaml_files.append("agents/openai.yaml")
         openai_yamls[skill_name] = yaml_content
 
-    # 6. Generate lock
-    lock = _create_codex_lock(repo_root, pack_dir, manifest, exposed, skill_files)
+    # 6. Generate the Knowledge Map before writing the lock. If there is no
+    # indexable knowledge, write_knowledge_map returns None and no map file or
+    # hash is recorded. The lock stores the hash of the canonical map text, so
+    # check_sync can compare against a rebuilt text hash regardless of the
+    # platform line endings of the on-disk file.
+    map_text = write_knowledge_map(repo_root, repo_root / ".illuminate" / "knowledge-map.md")
+    knowledge_map_hash = hash_string(map_text) if map_text is not None else None
+
+    # 7. Generate lock
+    lock = _create_codex_lock(repo_root, pack_dir, manifest, exposed, skill_files, knowledge_map_hash)
 
     return {
         "pack_id": manifest.get("id", "?"),
@@ -335,6 +352,14 @@ def check_sync(
             repo_root, ".agents/skills", lock.get("skills", []), issues
         )
 
+        # Verify the Knowledge Map when the lock declared one. check is
+        # read-only: the shared helper rebuilds the map text and compares its
+        # hash to the lock record, so a doc added/moved/removed after sync is
+        # flagged even though the on-disk map file was not regenerated.
+        expected_map_hash = lock.get("knowledge_map_hash")
+        if expected_map_hash:
+            check_knowledge_map(repo_root, expected_map_hash, ".illuminate/knowledge-map.md", issues)
+
     return (len(issues) == 0), issues
 
 
@@ -376,6 +401,13 @@ def clean_sync(repo_root: Path) -> dict:
     # Remove .agents/skills/ and empty parent dirs up to repo root
     if skills_dir.exists():
         removed.extend(remove_empty_parent_dirs(skills_dir, repo_root))
+
+    # Remove the knowledge map (a managed artifact when the lock records a hash)
+    if (lock or {}).get("knowledge_map_hash"):
+        map_path = repo_root / ".illuminate" / "knowledge-map.md"
+        if map_path.exists():
+            map_path.unlink()
+            removed.append(".illuminate/knowledge-map.md")
 
     # Remove codex-lock.json
     lock_path = repo_root / ".illuminate" / "codex-lock.json"

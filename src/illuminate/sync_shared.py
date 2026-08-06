@@ -11,9 +11,51 @@ import shutil
 from pathlib import Path
 from typing import Dict, List, Set
 
-from .hashutil import hash_file
+from .hashutil import hash_file, hash_string
+from .knowledge_router import build_knowledge_map
 from .manifest import load_policy_index
 from .managed_block import END_MARKER, make_begin_marker
+
+
+# The routing order shared by every harness block. Claude uses a session-local
+# map path but must carry the same routing order.
+KNOWLEDGE_ROUTING_ORDER = """Routing order:
+1. Journey for cross-module behavior
+2. Module owner document for module behavior
+3. Component document for API/lifecycle detail
+4. Metadata for claim state, tests, gaps, and evidence
+5. Source code and logs for final verification"""
+
+PROJECT_KNOWLEDGE_BLOCK = """## Project Knowledge
+
+Before broad source search, read `.illuminate/knowledge-map.md`.
+
+{KNOWLEDGE_ROUTING_ORDER}""".format(KNOWLEDGE_ROUTING_ORDER=KNOWLEDGE_ROUTING_ORDER)
+
+
+def check_knowledge_map(
+    repo_root: Path,
+    expected_hash: str,
+    map_rel: str,
+    issues: List[str],
+) -> None:
+    """Append Knowledge Map staleness issues when the lock declared a map.
+
+    check is read-only: rebuild the map text from the current repo state and
+    compare its hash against the lock record. A doc added/moved/removed after
+    sync yields different text -> hash mismatch, even though the on-disk map
+    file was not regenerated.
+    """
+    rebuilt = build_knowledge_map(repo_root)
+    if rebuilt is None:
+        # Docs were removed after sync; the map is no longer derivable.
+        issues.append("Knowledge map no longer derivable")
+        return
+    map_path = repo_root / map_rel
+    if not map_path.exists():
+        issues.append(f"Missing knowledge map: {map_rel}")
+    if hash_string(rebuilt) != expected_hash:
+        issues.append("Knowledge map hash mismatch — run sync again")
 
 
 def ensure_writable(path: Path) -> None:
@@ -319,6 +361,8 @@ def build_agents_block(pack_dir: Path, manifest: dict, exposed: Set[str]) -> str
         begin,
         "",
         policy_text,
+        "",
+        PROJECT_KNOWLEDGE_BLOCK,
         "",
         f"Synchronized skills: {exposed_list}",
         "",

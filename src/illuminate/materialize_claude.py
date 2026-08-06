@@ -12,6 +12,7 @@ from .resolve import create_mount_plan, resolve_file_list
 from .lockfile import build_lock_envelope, create_lock
 from .manifest import load_pack_manifest, load_policy_index, load_skill_contracts
 from .hashutil import hash_directory, lock_hash
+from .sync_shared import KNOWLEDGE_ROUTING_ORDER
 from .validate import validate_pack
 
 
@@ -60,6 +61,15 @@ def _generate_claude_md(pack_dir, mount_plan):
     lines.append("## Skills")
     lines.append("")
     lines.append("Skills are auto-discovered from `.claude/skills/`. Activate by task.")
+    lines.append("")
+    lines.append("## Project Knowledge")
+    lines.append("")
+    lines.append(
+        "Read `project-knowledge-map.md` before broad repository search."
+    )
+    lines.append("Paths inside the map are relative to the target repository root.")
+    lines.append("")
+    lines.append(KNOWLEDGE_ROUTING_ORDER)
     lines.append("")
 
     return "\n".join(lines)
@@ -177,6 +187,14 @@ def materialize_session(pack_dir, repo, skill_filter=None):
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dest)
 
+    # Knowledge Map: written into the session dir (never the target repo).
+    # Returns None when the target repo has no indexable knowledge (no file).
+    knowledge_map_written = False
+    repo_path = Path(mount_plan["repo"]["path"]) if isinstance(mount_plan["repo"], dict) else Path(mount_plan["repo"])
+    from .knowledge_router import write_knowledge_map
+    if write_knowledge_map(repo_path, session_dir / "project-knowledge-map.md") is not None:
+        knowledge_map_written = True
+
     # Use only exposed contracts for permissions
     exposed = set(mount_plan["skills"]["exposed"])
     active_contracts = [
@@ -206,6 +224,8 @@ def materialize_session(pack_dir, repo, skill_filter=None):
         "claude-settings.json",
         "mount-plan.json",
     ])
+    if knowledge_map_written:
+        managed_artifacts.append("project-knowledge-map.md")
     pack_hash = lock_hash(hash_directory(pack_dir))
     envelope = build_lock_envelope(
         harness="claude-code",

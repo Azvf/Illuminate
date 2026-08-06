@@ -26,6 +26,7 @@ from illuminate.resolve import create_mount_plan, resolve_pack
 from illuminate.sync_codex import sync_codex
 from illuminate.sync_codebuddy import sync_codebuddy
 from illuminate.sync_cursor import sync_cursor
+from illuminate.sync_shared import PROJECT_KNOWLEDGE_BLOCK
 
 REPO_ROOT = Path(__file__).parent.parent
 CORE_PACK = REPO_ROOT / "packs" / "core"
@@ -297,6 +298,116 @@ class TestSchemaConformance(unittest.TestCase):
             info = materialize_session(CORE_PACK, tmp)
             errors = validate_schema(info["lock"], schema)
             self.assertEqual(errors, [], f"Mount lock fails schema: {errors}")
+
+
+class TestNavigationBlockConsistency(unittest.TestCase):
+    """Every adapter's generated agent block carries the same project-knowledge
+    navigation rule, so agents route to the knowledge map before broad search
+    regardless of harness. The shared source of truth is
+    sync_shared.PROJECT_KNOWLEDGE_BLOCK; cursor/codex/codebuddy embed it
+    verbatim, while claude materializes its own equivalent section.
+    """
+
+    def _cursor_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sync_cursor(CORE_PACK, Path(tmp))
+            return (Path(tmp) / ".cursor" / "rules" / "illuminate" / "core.mdc").read_text(
+                encoding="utf-8"
+            )
+
+    def _codex_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sync_codex(CORE_PACK, Path(tmp))
+            return (Path(tmp) / "AGENTS.md").read_text(encoding="utf-8")
+
+    def _codebuddy_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sync_codebuddy(CORE_PACK, Path(tmp))
+            return (Path(tmp) / ".codebuddy" / "CODEBUDDY.md").read_text(
+                encoding="utf-8"
+            )
+
+    def _claude_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            info = materialize_session(CORE_PACK, str(tmp))
+            return (Path(info["session_dir"]) / "CLAUDE.md").read_text(
+                encoding="utf-8"
+            )
+
+    def test_shared_block_contract(self):
+        """The shared navigation block must carry the exact routing contract:
+        the header, the map reference, and the five routing-order lines."""
+        self.assertIn("## Project Knowledge", PROJECT_KNOWLEDGE_BLOCK)
+        self.assertIn("`.illuminate/knowledge-map.md`", PROJECT_KNOWLEDGE_BLOCK)
+        self.assertIn("Routing order:", PROJECT_KNOWLEDGE_BLOCK)
+        order_lines = [
+            "1. Journey for cross-module behavior",
+            "2. Module owner document for module behavior",
+            "3. Component document for API/lifecycle detail",
+            "4. Metadata for claim state, tests, gaps, and evidence",
+            "5. Source code and logs for final verification",
+        ]
+        for line in order_lines:
+            self.assertIn(line, PROJECT_KNOWLEDGE_BLOCK)
+
+    def test_cursor_codex_codebuddy_embed_shared_block(self):
+        """The three harnesses that go through build_agents_block must embed the
+        shared navigation block verbatim (all its key substrings present)."""
+        shared_substrings = [
+            "## Project Knowledge",
+            "Before broad source search, read `.illuminate/knowledge-map.md`.",
+            "Routing order:",
+            "1. Journey for cross-module behavior",
+            "2. Module owner document for module behavior",
+            "3. Component document for API/lifecycle detail",
+            "4. Metadata for claim state, tests, gaps, and evidence",
+            "5. Source code and logs for final verification",
+        ]
+        blocks = {
+            "cursor": self._cursor_block(),
+            "codex": self._codex_block(),
+            "codebuddy": self._codebuddy_block(),
+        }
+        for name, block in blocks.items():
+            for sub in shared_substrings:
+                self.assertIn(
+                    sub, block,
+                    f"{name} block missing shared navigation substring: {sub!r}",
+                )
+
+    def test_claude_block_carries_navigation_rule(self):
+        """The Claude session CLAUDE.md carries the same routing order as the
+        shared block (pointing at its own session-local map path), so claude
+        also routes to knowledge before broad search."""
+        block = self._claude_block()
+        self.assertIn("## Project Knowledge", block)
+        self.assertIn("project-knowledge-map.md", block)
+        order_lines = [
+            "1. Journey for cross-module behavior",
+            "2. Module owner document for module behavior",
+            "3. Component document for API/lifecycle detail",
+            "4. Metadata for claim state, tests, gaps, and evidence",
+            "5. Source code and logs for final verification",
+        ]
+        for line in order_lines:
+            self.assertIn(
+                line, block,
+                f"claude block missing routing order line: {line!r}",
+            )
+
+    def test_all_blocks_have_projection_knowledge_header(self):
+        """The one substring common to every adapter's block is the section
+        header, proving a consistent navigation section across all harnesses."""
+        for name, block in (
+            ("cursor", self._cursor_block()),
+            ("codex", self._codex_block()),
+            ("codebuddy", self._codebuddy_block()),
+            ("claude", self._claude_block()),
+        ):
+            self.assertIn(
+                "## Project Knowledge", block,
+                f"{name} block missing the Project Knowledge section",
+            )
 
 
 if __name__ == "__main__":

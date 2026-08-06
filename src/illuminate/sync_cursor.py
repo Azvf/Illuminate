@@ -33,8 +33,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from .command_catalog import build_command_catalog
+from .knowledge_router import write_knowledge_map
 from .sync_shared import (
     build_agents_block,
+    check_knowledge_map,
     check_managed_file_hashes,
     ensure_writable,
     preflight_managed_command_tree,
@@ -43,7 +45,7 @@ from .sync_shared import (
     sync_managed_command_tree,
     sync_managed_skill_tree,
 )
-from .hashutil import hash_file, hash_directory, lock_hash
+from .hashutil import hash_file, hash_directory, hash_string, lock_hash
 from .lockfile import build_lock_envelope
 from .managed_block import (
     BEGIN_MARKER as _BEGIN_MARKER,
@@ -196,6 +198,7 @@ def _write_lock(
     command_hashes: Dict[str, str],
     agents_compat: bool,
     rules_artifact_hash: str,
+    knowledge_map_hash: Optional[str] = None,
 ) -> dict:
     """Write .illuminate/cursor-lock.json."""
     lock_dir = repo_root / _LOCK_DIR
@@ -222,6 +225,8 @@ def _write_lock(
         ],
         *[f"{_COMMANDS_DIR}/{name}" for name in command_hashes],
     ]
+    if knowledge_map_hash is not None:
+        managed_artifacts.append(f"{_LOCK_DIR}/knowledge-map.md")
 
     lock = build_lock_envelope(
         harness="cursor",
@@ -249,6 +254,8 @@ def _write_lock(
         lock["agents_md_hash"] = rules_artifact_hash
     else:
         lock["rules_md_hash"] = rules_artifact_hash
+    if knowledge_map_hash is not None:
+        lock["knowledge_map_hash"] = knowledge_map_hash
 
     lock_path = lock_dir / _LOCK_FILE
     with open(lock_path, "w", encoding="utf-8") as f:
@@ -483,6 +490,14 @@ def sync_cursor(
         rules_artifact_hash = hash_file(rules_path)
         _remove_old_agents_block(repo_root, lock)
 
+    # Generate the Knowledge Map before writing the lock. If there is no
+    # indexable knowledge, write_knowledge_map returns None and no map file or
+    # hash is recorded. The lock stores the hash of the canonical map text, so
+    # check_sync can compare against a rebuilt text hash regardless of the
+    # platform line endings of the on-disk file.
+    map_text = write_knowledge_map(repo_root, repo_root / _LOCK_DIR / "knowledge-map.md")
+    knowledge_map_hash = hash_string(map_text) if map_text is not None else None
+
     # Write lock
     _write_lock(
         repo_root,
@@ -493,6 +508,7 @@ def sync_cursor(
         command_hashes,
         agents_compat,
         rules_artifact_hash,
+        knowledge_map_hash,
     )
 
     return {
@@ -550,6 +566,14 @@ def check_sync(pack_dir: Path, repo_root: Path) -> Tuple[bool, List[str]]:
             actual = hash_file(rules_path)
             if actual != lock["rules_md_hash"]:
                 issues.append(f"{_RULES_REL} hash mismatch — run sync again")
+
+    # Check the Knowledge Map when the lock declared one. check is read-only:
+    # the shared helper rebuilds the map text and compares its hash to the
+    # lock record, so a doc added/moved/removed after sync is flagged even
+    # though the on-disk map file was not regenerated.
+    expected_map_hash = lock.get("knowledge_map_hash")
+    if expected_map_hash:
+        check_knowledge_map(repo_root, expected_map_hash, f"{_LOCK_DIR}/knowledge-map.md", issues)
 
     # Check skills via the shared helper
     check_managed_file_hashes(
@@ -768,6 +792,13 @@ def clean_sync(repo_root: Path) -> dict:
                     if new_content != content:
                         agents_path.write_text(new_content, encoding="utf-8")
                         removed.append("AGENTS.md illuminate block")
+
+    # Remove the knowledge map (a managed artifact when the lock records a hash)
+    if lock.get("knowledge_map_hash"):
+        map_path = repo_root / _LOCK_DIR / "knowledge-map.md"
+        if map_path.exists():
+            map_path.unlink()
+            removed.append(f"{_LOCK_DIR}/knowledge-map.md")
 
     # Remove lock
     lock_path = repo_root / _LOCK_DIR / _LOCK_FILE

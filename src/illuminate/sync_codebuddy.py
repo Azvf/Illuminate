@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from .hashutil import hash_file, hash_directory, lock_hash
+from .hashutil import hash_file, hash_directory, hash_string, lock_hash
 from .lockfile import build_lock_envelope
 from .managed_block import (
     BEGIN_MARKER as _BEGIN_MARKER,
@@ -26,9 +26,12 @@ from .managed_block import (
     remove_block,
 )
 from .command_catalog import build_command_catalog
+from .knowledge_router import write_knowledge_map
 from .manifest import load_policy_index
 from .resolve import resolve_pack
 from .sync_shared import (
+    PROJECT_KNOWLEDGE_BLOCK,
+    check_knowledge_map,
     check_managed_file_hashes,
     ensure_writable,
     preflight_managed_command_tree,
@@ -182,16 +185,11 @@ def _build_codebuddy_block(manifest: dict, exposed: Set[str]) -> str:
         "",
         "- `.codebuddy/skills/`",
         "",
-        "项目稳定知识位于：",
-        "",
-        "- `docs/20-components/`",
-        "- `docs/30-modules/`",
-        "- `docs/40-journeys/`",
-        "- `docs/70-metadata/`",
-        "",
         "开发中发现可长期复用的小型事实时，使用 `/record-knowledge`。",
         "当单一模块文档需要形成结构体系时，使用 `/archive-module-doc`。",
         "跨模块清理重复、过期路径或索引时，使用 `/tidy-doc`。",
+        "",
+        PROJECT_KNOWLEDGE_BLOCK,
         "",
         f"Synchronized skills: {exposed_list}",
         "",
@@ -221,6 +219,7 @@ def _write_lock(
     skill_hashes: Dict[str, Dict[str, str]],
     command_hashes: Dict[str, str],
     codebuddy_hash: str,
+    knowledge_map_hash: Optional[str] = None,
 ) -> dict:
     """Write codebuddy-lock.json."""
     lock_dir = repo_root / _LOCK_DIR
@@ -254,6 +253,7 @@ def _write_lock(
                 for rel in entry["files"]
             ],
             *[f".codebuddy/commands/{name}" for name in command_hashes],
+            *([".illuminate/knowledge-map.md"] if knowledge_map_hash else []),
         ],
         capabilities={"permissions": "declarative-only"},
     )
@@ -265,6 +265,8 @@ def _write_lock(
         "commands": command_hashes,
         "codebuddy_md_hash": codebuddy_hash,
     })
+    if knowledge_map_hash:
+        lock["knowledge_map_hash"] = knowledge_map_hash
 
     lock_path = lock_dir / "codebuddy-lock.json"
     with open(lock_path, "w", encoding="utf-8") as f:
@@ -344,11 +346,17 @@ def sync_codebuddy(
     codebuddy_path.write_text(new_content, encoding="utf-8")
     codebuddy_hash = hash_file(codebuddy_path)
 
+    # Knowledge Map: written into the lock dir before the lock is persisted.
+    # The lock records the hash of the map *text* (not the file on disk) so a
+    # later check can re-derive the text and compare against a fresh build.
+    map_text = write_knowledge_map(repo_root, repo_root / _LOCK_DIR / "knowledge-map.md")
+    knowledge_map_hash = hash_string(map_text) if map_text is not None else None
+
     # Write lock
     _write_lock(
         pack_dir, repo_root, manifest, exposed,
         rule_hashes, skill_hashes, command_hashes,
-        codebuddy_hash,
+        codebuddy_hash, knowledge_map_hash,
     )
 
     return {
@@ -412,6 +420,14 @@ def check_sync(pack_dir: Path, repo_root: Path) -> Tuple[bool, List[str]]:
         if actual != lock["codebuddy_md_hash"]:
             issues.append("CODEBUDDY.md hash mismatch")
 
+    # Check Knowledge Map (only when the lock records a hash for it). The
+    # stale check re-derives the map text and compares its hash against the
+    # lock, so a docs/ change after sync (a new journey, etc.) is flagged even
+    # though the on-disk map file is unchanged.
+    map_hash = lock.get("knowledge_map_hash")
+    if map_hash:
+        check_knowledge_map(repo_root, map_hash, f"{_LOCK_DIR}/knowledge-map.md", issues)
+
     return (len(issues) == 0), issues
 
 
@@ -470,6 +486,13 @@ def clean_sync(repo_root: Path) -> dict:
         if new_content != content:
             codebuddy_path.write_text(new_content, encoding="utf-8")
             removed.append("CODEBUDDY.md illuminate block")
+
+    # Remove knowledge map (a managed artifact when the lock records a hash)
+    if has_lock and lock.get("knowledge_map_hash"):
+        map_path = repo_root / _LOCK_DIR / "knowledge-map.md"
+        if map_path.exists():
+            map_path.unlink()
+            removed.append(".illuminate/knowledge-map.md")
 
     # Remove lock
     lock_path = repo_root / _LOCK_DIR / "codebuddy-lock.json"
