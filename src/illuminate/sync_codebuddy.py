@@ -33,6 +33,7 @@ from .sync_shared import (
     apply_knowledge_map,
     check_knowledge_map,
     check_managed_file_hashes,
+    ensure_regular_file,
     ensure_writable,
     other_harness_declares_map,
     preflight_knowledge_map,
@@ -61,8 +62,12 @@ _LOCK_DIR = ".illuminate"
 def _preflight_target_paths(repo_root: Path) -> None:
     """Verify every target Illuminate will create/write under repo_root is
     writable (or creatable), including an already-existing target file itself
-    (not just its parent directory). Fails closed before any write."""
-    for rel in (_RULES_DIR, _SKILLS_DIR, _COMMANDS_DIR, ".codebuddy/CODEBUDDY.md", _LOCK_DIR):
+    (not just its parent directory). Every expected write *file* (CODEBUDDY.md
+    and the lock) must also be a regular file. Fails closed before any write."""
+    for rel in (_RULES_DIR, _SKILLS_DIR, _COMMANDS_DIR, _LOCK_DIR):
+        ensure_writable(repo_root / rel)
+    for rel in (".codebuddy/CODEBUDDY.md", f"{_LOCK_DIR}/codebuddy-lock.json"):
+        ensure_regular_file(repo_root / rel)
         ensure_writable(repo_root / rel)
 
 
@@ -208,6 +213,8 @@ def _load_lock(repo_root: Path) -> dict:
     """Load existing codebuddy-lock.json or return empty."""
     lock_path = repo_root / _LOCK_DIR / "codebuddy-lock.json"
     if lock_path.exists():
+        if not lock_path.is_file():
+            raise ValueError(f"{lock_path} exists but is not a regular file")
         return json.loads(lock_path.read_text(encoding="utf-8"))
     return {"skills": []}
 
@@ -286,8 +293,13 @@ def sync_codebuddy(
     pack_dir: Path,
     repo_root: Path,
     skill_filter: Optional[List[str]] = None,
+    force: bool = False,
 ) -> dict:
     """Synchronize Illuminate Pack into a target repository for CodeBuddy.
+
+    ``force`` authorizes overwriting/deleting an existing knowledge map that no
+    Illuminate lock owns (an unmanaged leftover). Without it such a map aborts
+    preflight with ValueError.
 
     Steps:
       1. Validate pack.
@@ -333,7 +345,9 @@ def sync_codebuddy(
     )
     _preflight_target_paths(repo_root)
     map_path = repo_root / _LOCK_DIR / "knowledge-map.md"
-    map_text = preflight_knowledge_map(repo_root, map_path)
+    map_text = preflight_knowledge_map(
+        repo_root, map_path, force=force, harness="codebuddy"
+    )
 
     # 4. Phase 2 — write.
     rule_hashes = _sync_rules(pack_dir, repo_root, manifest)
@@ -354,7 +368,7 @@ def sync_codebuddy(
     # dir before the lock is persisted. The lock records the hash of the map
     # *text* (not the file on disk) so a later check can re-derive the text
     # and compare against a fresh build.
-    apply_knowledge_map(map_path, map_text)
+    apply_knowledge_map(map_path, map_text, force=force)
     knowledge_map_hash = hash_string(map_text) if map_text is not None else None
 
     # Write lock

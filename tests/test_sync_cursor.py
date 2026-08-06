@@ -1500,14 +1500,15 @@ class TestCursorCli(unittest.TestCase):
 
     def test_cmd_sync_cursor_success(self):
         args = SimpleNamespace(
-            pack=str(CORE_PACK), repo=str(self._repo()), skill=None, agents_compat=False
+            pack=str(CORE_PACK), repo=str(self._repo()), skill=None,
+            agents_compat=False, force=False,
         )
         self.assertEqual(cli._cmd_sync_cursor(args), 0)
 
     def test_cmd_sync_cursor_missing_pack_returns_1(self):
         args = SimpleNamespace(
             pack=str(self.tmpdir / "nope"), repo=str(self._repo()),
-            skill=None, agents_compat=False,
+            skill=None, agents_compat=False, force=False,
         )
         self.assertEqual(cli._cmd_sync_cursor(args), 1)
 
@@ -1517,13 +1518,13 @@ class TestCursorCli(unittest.TestCase):
         proj.mkdir(parents=True)
         proj.joinpath("SKILL.md").write_text("# mine\n", encoding="utf-8")
         args = SimpleNamespace(pack=str(CORE_PACK), repo=str(repo), skill=None,
-                               agents_compat=False)
+                               agents_compat=False, force=False)
         self.assertEqual(cli._cmd_sync_cursor(args), 1)
 
     def test_cmd_sync_cursor_agents_compat(self):
         repo = self._repo()
         args = SimpleNamespace(pack=str(CORE_PACK), repo=str(repo), skill=None,
-                               agents_compat=True)
+                               agents_compat=True, force=False)
         self.assertEqual(cli._cmd_sync_cursor(args), 0)
         self.assertIn(_BEGIN_MARKER, (repo / "AGENTS.md").read_text(encoding="utf-8"))
         self.assertFalse((repo / _RULES_REL).exists())

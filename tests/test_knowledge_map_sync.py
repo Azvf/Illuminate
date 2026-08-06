@@ -182,6 +182,24 @@ class TestKnowledgeMapSync(unittest.TestCase):
                     (repo / MAP_REL).exists(), f"{name} left orphan knowledge map"
                 )
 
+    def test_check_reports_unreadable_source_as_issue_not_crash(self):
+        """Fail-closed applies to the write path: check_sync reports an
+        unreadable knowledge source as an issue instead of raising."""
+        repo = self._make_repo("unreadable")
+        _write(repo / "docs" / "40-journeys" / "a.md", "# Journey A\n\ncross-module.\n")
+        sync_cursor(CORE_PACK, repo)
+        ok, _ = check_sync(CORE_PACK, repo)
+        self.assertTrue(ok)
+
+        # Replace the journey file with a directory (unreadable as text).
+        (repo / "docs" / "40-journeys" / "a.md").unlink()
+        (repo / "docs" / "40-journeys" / "a.md").mkdir()
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertFalse(ok)
+        self.assertTrue(
+            any("Cannot read knowledge source" in i for i in issues), issues
+        )
+
     def test_materialize_with_docs_writes_session_map_only(self):
         """materialize_session against a repo with docs must generate the map
         in the session dir (never the target repo) and register it in the
@@ -370,25 +388,116 @@ class TestKnowledgeMapSync(unittest.TestCase):
             f"Expected an orphan-map stale signal in: {issues}",
         )
 
-    # ── P1-4: resync preserves a hand-placed map ──
+    # ── P1-5: preflight write-target type contract (Task A) ──
 
-    def test_resync_keeps_hand_placed_map_not_recorded_in_any_lock(self):
+    def test_map_path_as_directory_raises_without_partial_write(self):
+        """If .illuminate/knowledge-map.md exists as a directory, sync must
+        raise ValueError in preflight with no partial write anywhere."""
+        repo = self._make_repo()
+        map_path = repo / MAP_REL
+        map_path.mkdir(parents=True, exist_ok=True)
+
+        with self.assertRaises(ValueError):
+            sync_cursor(CORE_PACK, repo)
+
+        # Fail-before-write: no lock, no rules, no skills were written.
+        self.assertFalse((repo / ".illuminate" / "cursor-lock.json").exists())
+        self.assertFalse((repo / ".cursor").exists())
+        self.assertTrue(map_path.is_dir(), "The directory map must be untouched")
+
+    def test_lock_file_as_directory_raises_without_partial_write(self):
+        """If .illuminate/cursor-lock.json exists as a directory, sync must
+        raise ValueError in preflight with no partial write."""
+        repo = self._make_repo()
+        lock_dir = repo / ".illuminate" / "cursor-lock.json"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+
+        with self.assertRaises(ValueError):
+            sync_cursor(CORE_PACK, repo)
+
+        # Fail-before-write: no rules .mdc and no skills written.
+        self.assertFalse((repo / ".cursor" / "rules" / "illuminate" / "core.mdc").exists())
+        self.assertFalse((repo / ".cursor" / "skills").exists())
+
+    # ── P1-6: unmanaged hand-placed map ownership contract (Task B) ──
+
+    def test_hand_map_with_knowledge_requires_force_to_overwrite(self):
+        """A hand-placed map in a repo with indexable docs is unmanaged: a
+        plain sync refuses in preflight; --force overwrites it and check
+        passes."""
+        repo = self._make_repo()
+        _write(repo / "docs" / "40-journeys" / "a.md", "# Journey A\n\ncross-module.\n")
+        _write(repo / MAP_REL, "# Hand-placed map\n")
+
+        # No force -> preflight refuses, map untouched.
+        with self.assertRaises(ValueError):
+            sync_cursor(CORE_PACK, repo)
+        self.assertEqual(
+            (repo / MAP_REL).read_text(encoding="utf-8"), "# Hand-placed map\n"
+        )
+
+        # Force -> overwrite with the generated map; check passes.
+        sync_cursor(CORE_PACK, repo, force=True)
+        content = (repo / MAP_REL).read_text(encoding="utf-8")
+        self.assertIn("Project Knowledge Map", content)
+        self.assertIn("Journey A", content)
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertTrue(ok, f"Check should pass after forced overwrite: {issues}")
+
+    def test_hand_map_without_knowledge_requires_force_to_delete(self):
+        """A hand-placed map with no indexable docs is unmanaged: a plain sync
+        refuses; --force deletes it and check passes."""
+        repo = self._make_repo()
+        _write(repo / MAP_REL, "# Hand-placed map\n")
+
+        with self.assertRaises(ValueError):
+            sync_cursor(CORE_PACK, repo)
+        self.assertTrue((repo / MAP_REL).exists())
+
+        sync_cursor(CORE_PACK, repo, force=True)
+        self.assertFalse((repo / MAP_REL).exists())
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertTrue(ok, f"Check should pass after forced delete: {issues}")
+
+    # ── P1-7: multi-harness shared map ownership is preserved (Task B) ──
+
+    def test_hand_map_owned_by_other_harness_is_allowed(self):
+        """A map owned by another harness's lock must not be refused as
+        unmanaged — the shared-map ownership decision must treat an
+        Illuminate-recorded map as managed."""
+        repo = self._make_repo()
+        _write(repo / "docs" / "40-journeys" / "a.md", "# Journey A\n\ncross-module.\n")
+        sync_codex(CORE_PACK, repo)  # codex records the map hash
+        self.assertTrue((repo / MAP_REL).exists())
+
+        # Cursor resync sees the map owned by codex -> no refusal.
+        sync_cursor(CORE_PACK, repo)
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertTrue(ok, f"Cursor check should pass over a codex-owned map: {issues}")
+
+    # ── P1-4: resync hand-placed map ──
+
+    def test_resync_hand_placed_map_requires_force_when_unowned(self):
         """A .illuminate/knowledge-map.md that no Illuminate sync ever created
-        (no lock records a knowledge_map_hash) must be preserved on resync, not
-        unlinked — Illuminate only deletes files it owns."""
+        (no lock records a knowledge_map_hash) is unmanaged: a plain resync
+        must refuse in preflight, and only --force authorizes removing it."""
         repo = self._make_repo()
         sync_cursor(CORE_PACK, repo)  # no docs -> lock records no map hash
         _write(repo / MAP_REL, "# Hand-placed map\n")
 
-        sync_cursor(CORE_PACK, repo)  # resync with no docs
-
-        self.assertTrue(
-            (repo / MAP_REL).exists(),
-            "Hand-placed map must survive a resync that records no ownership",
-        )
+        # No force: preflight refuses the unmanaged map, leaving it untouched.
+        with self.assertRaises(ValueError):
+            sync_cursor(CORE_PACK, repo)
+        self.assertTrue((repo / MAP_REL).exists())
         self.assertEqual(
             (repo / MAP_REL).read_text(encoding="utf-8"), "# Hand-placed map\n"
         )
+
+        # Force: no docs remain indexable -> the stale hand map is deleted.
+        sync_cursor(CORE_PACK, repo, force=True)
+        self.assertFalse((repo / MAP_REL).exists())
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertTrue(ok, f"Check should pass after forced removal: {issues}")
 
     def test_resync_deletes_map_when_lock_records_ownership(self):
         """A stale map that Illuminate previously created (a lock records its

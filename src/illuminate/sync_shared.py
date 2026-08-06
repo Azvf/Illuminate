@@ -57,7 +57,14 @@ def check_knowledge_map(
     check is read-only. The on-disk file hash is compared too (P1-1) so a
     tampered map file is flagged even when the rebuilt text matches.
     """
-    rebuilt = build_knowledge_map(repo_root)
+    try:
+        rebuilt = build_knowledge_map(repo_root)
+    except ValueError as exc:
+        # Fail-closed only on the write path: check is read-only diagnostics,
+        # so an unreadable knowledge source becomes a reported issue instead
+        # of a traceback.
+        issues.append(str(exc))
+        return
     map_path = repo_root / map_rel
     lock_expects_map = expected_hash is not None
     currently_generatable = rebuilt is not None
@@ -94,35 +101,82 @@ def check_knowledge_map(
         issues.append("Knowledge map hash mismatch — run sync again")
 
 
-def preflight_knowledge_map(repo_root: Path, map_path: Path) -> Optional[str]:
+def ensure_regular_file(path: Path) -> None:
+    """Fail closed when an Illuminate write target exists but is not a regular
+    file.
+
+    A directory (or other non-regular file) occupying a path Illuminate would
+    overwrite as a file must abort preflight before any write, so the sync
+    never corrupts or partially overwrites such a target.
+    """
+    if path.exists() and not path.is_file():
+        raise ValueError(f"{path} exists but is not a regular file")
+
+
+def preflight_knowledge_map(
+    repo_root: Path,
+    map_path: Path,
+    force: bool = False,
+    harness: Optional[str] = None,
+) -> Optional[str]:
     """Phase-1 probe for the knowledge map write/delete before any write.
 
     Computes the rebuilt map text (read-only) and probes writability of the
     write target or the stale map to be deleted, failing closed with ValueError
     before any other artifact is written. Returns the rebuilt map text (None
     when the map is absent) for use in Phase 2.
+
+    An existing map that no Illuminate lock owns (``_lock_records_map`` for any
+    lock in the .illuminate dir, or ``other_harness_declares_map`` for a
+    remaining harness's lock) is treated as unmanaged and refused unless
+    ``force`` authorizes overwrite. A non-regular-file write target also fails
+    closed first.
     """
+    ensure_regular_file(map_path)
     text = build_knowledge_map(repo_root)
     if text is not None or map_path.exists():
+        if map_path.exists() and not force and not _map_is_owned(repo_root, harness):
+            raise ValueError(
+                f"{map_path} exists but is not managed by any Illuminate lock; "
+                "move it aside or run with --force to overwrite it"
+            )
         ensure_writable(map_path)
     return text
 
 
-def apply_knowledge_map(map_path: Path, map_text: Optional[str]) -> bool:
+def _map_is_owned(repo_root: Path, harness: Optional[str]) -> bool:
+    """Whether any harness lock declares ownership of the shared knowledge map.
+
+    Combines the two ownership determinations: any lock (in the same
+    .illuminate dir) recording a ``knowledge_map_hash``, or any *other*
+    harness's lock still declaring a map (which also fails safe toward
+    ownership when a remaining harness's lock cannot be parsed).
+    """
+    if _lock_records_map(repo_root / ".illuminate"):
+        return True
+    if harness is not None and other_harness_declares_map(repo_root, harness):
+        return True
+    return False
+
+
+def apply_knowledge_map(
+    map_path: Path, map_text: Optional[str], force: bool = False
+) -> bool:
     """Phase-2 write or delete of the knowledge map using Phase-1's
     ``map_text``. Returns True when a stale map was deleted.
 
     A stale map is only deleted when Illuminate can prove it owns it: some
     harness lock (in the same .illuminate dir) records a ``knowledge_map_hash``
-    from an earlier sync. A map that no Illuminate sync ever recorded (e.g. a
-    hand-placed file) is preserved rather than unlinked, matching the codebase
-    rule of never deleting content Illuminate does not own.
+    from an earlier sync, or ``force`` authorizes removal of an unmanaged
+    leftover. A map that no Illuminate sync ever recorded (e.g. a hand-placed
+    file) is preserved rather than unlinked unless ``force`` is set, matching
+    the codebase rule of never deleting content Illuminate does not own.
     """
     if map_text is not None:
         map_path.parent.mkdir(parents=True, exist_ok=True)
         map_path.write_text(map_text, encoding="utf-8")
         return False
-    if map_path.exists() and _lock_records_map(map_path.parent):
+    if map_path.exists() and (_lock_records_map(map_path.parent) or force):
         map_path.unlink()
         return True
     return False

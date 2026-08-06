@@ -10,9 +10,9 @@ Commands:
     illuminate evidence audit --repo <path> [--pretty] [--output <path>]
     illuminate compat generate [--pack <dir>]
     illuminate compat check [--pack <dir>]
-    illuminate sync codex --repo <path> [--pack <dir>] [--skill <id>...]
-    illuminate sync codebuddy --repo <path> [--pack <dir>] [--skill <id>...]
-    illuminate sync cursor --repo <path> [--pack <dir>] [--skill <id>...] [--agents-compat]
+    illuminate sync codex --repo <path> [--pack <dir>] [--skill <id>...] [--force]
+    illuminate sync codebuddy --repo <path> [--pack <dir>] [--skill <id>...] [--force]
+    illuminate sync cursor --repo <path> [--pack <dir>] [--skill <id>...] [--agents-compat] [--force]
     illuminate sync check --repo <path> [--pack <dir>]
     illuminate sync clean --repo <path>
     illuminate sync doctor --repo <path> --harness cursor
@@ -142,12 +142,16 @@ def _build_parser():
     sc.add_argument("--repo", required=True, help="Target repository path")
     sc.add_argument("--skill", action="append", default=None,
                     help="Skill ID to sync (repeatable; default: all non-alias)")
+    sc.add_argument("--force", action="store_true",
+                    help="Overwrite an unmanaged knowledge map that no Illuminate lock owns")
 
     scb = ps.add_parser("codebuddy", help="Synchronize for CodeBuddy (.codebuddy/rules/illuminate/ + skills + commands)")
     scb.add_argument("--pack", default="packs/core", help="Pack directory path")
     scb.add_argument("--repo", required=True, help="Target repository path")
     scb.add_argument("--skill", action="append", default=None,
                      help="Skill ID to sync (repeatable; default: all non-alias)")
+    scb.add_argument("--force", action="store_true",
+                     help="Overwrite an unmanaged knowledge map that no Illuminate lock owns")
 
     scu = ps.add_parser("cursor", help="Synchronize for Cursor (.cursor/rules + .cursor/skills + commands)")
     scu.add_argument("--pack", default="packs/core", help="Pack directory path")
@@ -157,6 +161,8 @@ def _build_parser():
     scu.add_argument("--agents-compat", action="store_true",
                      help="Merge into the root AGENTS.md instead of writing "
                           ".cursor/rules/illuminate/core.mdc (for projects sharing AGENTS.md with Codex)")
+    scu.add_argument("--force", action="store_true",
+                     help="Overwrite an unmanaged knowledge map that no Illuminate lock owns")
 
     sch = ps.add_parser("check", help="Verify sync integrity for Codex, CodeBuddy, or Cursor")
     sch.add_argument("--pack", default="packs/core", help="Pack directory path")
@@ -495,7 +501,7 @@ def _cmd_sync_codex(args):
         return 1
 
     try:
-        result = sync_codex(pack_dir, repo, skill_filter=args.skill)
+        result = sync_codex(pack_dir, repo, skill_filter=args.skill, force=args.force)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -522,7 +528,7 @@ def _cmd_sync_codebuddy(args):
         return 1
 
     try:
-        result = sync_codebuddy(pack_dir, repo, skill_filter=args.skill)
+        result = sync_codebuddy(pack_dir, repo, skill_filter=args.skill, force=args.force)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -550,7 +556,8 @@ def _cmd_sync_cursor(args):
 
     try:
         result = sync_cursor(
-            pack_dir, repo, skill_filter=args.skill, agents_compat=args.agents_compat
+            pack_dir, repo, skill_filter=args.skill, agents_compat=args.agents_compat,
+            force=args.force,
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)

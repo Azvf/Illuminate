@@ -38,6 +38,7 @@ from .sync_shared import (
     build_agents_block,
     check_knowledge_map,
     check_managed_file_hashes,
+    ensure_regular_file,
     ensure_writable,
     other_harness_declares_map,
     preflight_knowledge_map,
@@ -98,6 +99,8 @@ def _load_lock(repo_root: Path) -> dict:
     """Load existing cursor-lock.json or return empty."""
     lock_path = repo_root / _LOCK_DIR / _LOCK_FILE
     if lock_path.exists():
+        if not lock_path.is_file():
+            raise ValueError(f"{lock_path} exists but is not a regular file")
         return json.loads(lock_path.read_text(encoding="utf-8"))
     return {"skills": []}
 
@@ -174,14 +177,21 @@ def _preflight_target_paths(repo_root: Path, lock: dict, agents_compat: bool) ->
         _LOCK_DIR,
         f"{_LOCK_DIR}/{_LOCK_FILE}",
     ]
+    file_targets = [f"{_LOCK_DIR}/{_LOCK_FILE}"]
     # AGENTS.md is written in compat mode and edited when its old block is
     # retired (compat -> default switch).
     if agents_compat or old_compat:
         artifacts.append("AGENTS.md")
+        file_targets.append("AGENTS.md")
     # core.mdc is written in default mode and removed when the old one is
     # retired (default -> compat switch).
     if not agents_compat or (agents_compat and not old_compat):
         artifacts.append(_RULES_REL)
+        file_targets.append(_RULES_REL)
+    # Every expected write *file* (as opposed to a managed directory) must be
+    # a regular file: a directory occupying that path fails closed here.
+    for rel in file_targets:
+        ensure_regular_file(repo_root / rel)
     for rel in artifacts:
         ensure_writable(repo_root / rel)
     return artifacts
@@ -402,8 +412,13 @@ def sync_cursor(
     repo_root: Path,
     skill_filter: Optional[List[str]] = None,
     agents_compat: bool = False,
+    force: bool = False,
 ) -> dict:
     """Synchronize Illuminate Pack into a target repository for Cursor.
+
+    ``force`` authorizes overwriting/deleting an existing knowledge map that no
+    Illuminate lock owns (an unmanaged leftover). Without it such a map aborts
+    preflight with ValueError.
 
     Steps:
       1. Validate pack.
@@ -453,7 +468,9 @@ def sync_cursor(
     _preflight_target_paths(repo_root, lock, agents_compat)
     _preflight_mode_switch(repo_root, lock, agents_compat)
     map_path = repo_root / _LOCK_DIR / "knowledge-map.md"
-    map_text = preflight_knowledge_map(repo_root, map_path)
+    map_text = preflight_knowledge_map(
+        repo_root, map_path, force=force, harness="cursor"
+    )
 
     # 4. Phase 2 — write. The rules artifact is handled as a mode transaction:
     #    write the new-mode artifact first, then clean the old-mode artifact.
@@ -499,7 +516,7 @@ def sync_cursor(
     # no hash is recorded. The lock stores the hash of the canonical map text,
     # so check_sync can compare against a rebuilt text hash regardless of the
     # platform line endings of the on-disk file.
-    apply_knowledge_map(map_path, map_text)
+    apply_knowledge_map(map_path, map_text, force=force)
     knowledge_map_hash = hash_string(map_text) if map_text is not None else None
 
     # Write lock

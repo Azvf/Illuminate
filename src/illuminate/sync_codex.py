@@ -29,6 +29,7 @@ from .sync_shared import (
     build_agents_block,
     check_knowledge_map,
     check_managed_file_hashes,
+    ensure_regular_file,
     other_harness_declares_map,
     preflight_knowledge_map,
     remove_empty_parent_dirs,
@@ -198,6 +199,8 @@ def load_codex_lock(repo_root: Path) -> Optional[dict]:
     lock_path = repo_root / ".illuminate" / "codex-lock.json"
     if not lock_path.exists():
         return None
+    if not lock_path.is_file():
+        raise ValueError(f"{lock_path} exists but is not a regular file")
     with open(lock_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -210,8 +213,13 @@ def sync_codex(
     pack_dir: Path,
     repo_root: Path,
     skill_filter: Optional[List[str]] = None,
+    force: bool = False,
 ) -> dict:
     """Synchronize Illuminate Pack into a target repository for Codex App.
+
+    ``force`` authorizes overwriting/deleting an existing knowledge map that no
+    Illuminate lock owns (an unmanaged leftover). Without it such a map aborts
+    preflight with ValueError.
 
     Steps:
       1. Validate pack.
@@ -243,11 +251,16 @@ def sync_codex(
     contracts = resolved["contracts"]
     exposed = set(resolved["skills"]["exposed"])
 
-    # 3. Phase 1 preflight: the knowledge map write/delete must pass before
-    #    any repo modification, so a read-only map or un-deletable stale map
-    #    leaves no partial write behind.
+    # 3. Phase 1 preflight: every expected write file must be a regular file
+    #    and the knowledge map write/delete must pass before any repo
+    #    modification, so a read-only map, an unmanaged leftover map, or an
+    #    un-deletable stale map leaves no partial write behind.
+    ensure_regular_file(repo_root / ".illuminate" / "codex-lock.json")
+    ensure_regular_file(repo_root / "AGENTS.md")
     map_path = repo_root / ".illuminate" / "knowledge-map.md"
-    map_text = preflight_knowledge_map(repo_root, map_path)
+    map_text = preflight_knowledge_map(
+        repo_root, map_path, force=force, harness="codex"
+    )
 
     # 4. Sync .agents/skills/ first (lock-owned; project-owned skills
     # preserved; collisions fail closed before any repo modification)
@@ -283,7 +296,7 @@ def sync_codex(
     # and no hash is recorded. The lock stores the hash of the canonical map
     # text, so check_sync can compare against a rebuilt text hash regardless
     # of the platform line endings of the on-disk file.
-    apply_knowledge_map(map_path, map_text)
+    apply_knowledge_map(map_path, map_text, force=force)
     knowledge_map_hash = hash_string(map_text) if map_text is not None else None
 
     # 8. Generate lock
