@@ -10,12 +10,19 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
+
+from .document_layout import (
+    DEFAULT_HUMAN_ROOTS,
+    _MANIFEST_FILES,
+    is_root_relative_path,
+)
 
 # Only these two fields are consumed from module/component yaml manifests.
 _ID_RE = re.compile(r"^id:\s*(.+)$")
 _DOC_RE = re.compile(r"^document:\s*(.+)$")
-# Journey body links pointing into docs/30-modules (forward or backslash).
-_MODULE_LINK_RE = re.compile(r"\]\(docs[/\\]30-modules[/\\]([^)#]+)")
+# Local markdown link target: [text](target).
+_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 _H1_RE = re.compile(r"^#\s+(.+)$")
 _H2_RE = re.compile(r"^##\s+(.+)$")
 
@@ -107,6 +114,46 @@ def _parse_manifest(path: Path) -> Tuple[Optional[str], Optional[str]]:
     return doc_id, document
 
 
+def _journey_module_links(
+    lines: List[str], journey_path: Path, repo_root: Path
+) -> List[str]:
+    """Local markdown links in a journey that resolve under docs/30-modules.
+
+    Relative links are resolved against the journey's own directory (e.g.
+    ``../30-modules/x.md`` -> ``docs/30-modules/x.md``); direct ``docs/30-modules/``
+    prefix links stay supported. External URLs, mailto, and in-page anchors are
+    skipped.
+    """
+    links = set()
+    journey_dir = journey_path.parent
+    docs_dir = repo_root / "docs"
+    modules_root = (docs_dir / "30-modules").resolve()
+    for line in lines:
+        for m in _LINK_RE.finditer(line):
+            raw = m.group(1).strip()
+            if not raw or raw.startswith("#"):
+                continue
+            raw = raw.split("#", 1)[0].strip()
+            if not raw:
+                continue
+            parsed = urlsplit(raw)
+            if parsed.scheme or parsed.netloc:
+                continue
+            normalized = raw.replace("\\", "/")
+            if normalized.startswith("/"):
+                candidate = docs_dir / normalized.lstrip("/")
+            elif normalized.startswith("docs/"):
+                candidate = docs_dir / normalized[len("docs/"):]
+            else:
+                candidate = (journey_dir / normalized).resolve()
+            try:
+                rel = candidate.resolve().relative_to(modules_root)
+            except ValueError:
+                continue
+            links.add(rel.as_posix())
+    return sorted(links)
+
+
 def _journeys(repo_root: Path) -> Dict[str, Dict[str, object]]:
     journeys: Dict[str, Dict[str, object]] = {}
     journeys_dir = repo_root / "docs" / "40-journeys"
@@ -118,12 +165,7 @@ def _journeys(repo_root: Path) -> Dict[str, Dict[str, object]]:
         if title is None:
             continue
         intro = _first_intro(lines)
-        module_links = sorted(
-            {
-                name.strip().replace("\\", "/")
-                for name in _MODULE_LINK_RE.findall("\n".join(lines))
-            }
-        )
+        module_links = _journey_module_links(lines, path, repo_root)
         entry: Dict[str, object] = {
             "title": title,
             "file": path.name,
@@ -137,14 +179,28 @@ def _journeys(repo_root: Path) -> Dict[str, Dict[str, object]]:
 
 
 def _metadata_entries(repo_root: Path, kind: str) -> Dict[str, Dict[str, object]]:
-    """Index docs/70-metadata/<kind>/*/*.yaml manifests into maps/sections."""
+    """Index docs/70-metadata/<kind>/*/<manifest>.yaml manifests into maps.
+
+    Only the exact manifest filename for the kind is globbed (module.yaml /
+    component.yaml), and each manifest's root-relative document must resolve
+    under the kind's human doc root (docs/30-modules/ or docs/20-components/).
+    Entries that fail validation are skipped, matching the existing
+    missing-id/document skip behavior.
+    """
     entries: Dict[str, Dict[str, object]] = {}
     root = repo_root / "docs" / "70-metadata" / kind
     if not root.is_dir():
         return entries
-    for yaml_path in sorted(root.glob("*/*.yaml")):
+    expected_root = DEFAULT_HUMAN_ROOTS[kind]
+    layout = {"human_roots": DEFAULT_HUMAN_ROOTS}
+    for yaml_path in sorted(root.glob(f"*/{_MANIFEST_FILES[kind]}")):
         doc_id, document = _parse_manifest(yaml_path)
         if doc_id is None or document is None:
+            continue
+        if (
+            not is_root_relative_path(document, layout)
+            or Path(document).parts[0] != expected_root
+        ):
             continue
         entry: Dict[str, object] = {"document": document}
         body = repo_root / "docs" / document
@@ -219,3 +275,80 @@ def write_knowledge_map(repo_root: Path, dest: Path) -> Optional[str]:
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(text, encoding="utf-8")
     return text
+
+
+# --- Behavior-level routing (first-round read order) -------------------------
+# Mirrors the Knowledge Map "How to route" section: cross-module -> Journeys,
+# single-module -> Modules, API/lifecycle -> Components, and status/evidence ->
+# Metadata after the body.
+
+_VERIFY_RE = re.compile(
+    r"验证|已验证|结论|verified|verification|evidence|是否(成立|已验证|被验证)|可信"
+)
+
+
+def _matches(req: str, keywords: List[str]) -> bool:
+    return any(kw and kw.lower() in req for kw in keywords)
+
+
+def _first_match_id(req: str, docs: List[Dict[str, object]], key: str) -> Optional[str]:
+    for d in docs:
+        keywords = d.get("keywords") or []
+        if _matches(req, keywords) or _matches(req, [str(d.get(key, ""))]):
+            return d.get(key)
+    return None
+
+
+def route_read_order(request: str, knowledge_state: Dict[str, object]) -> List[str]:
+    """Return the recommended first-round read sequence for ``request`` against
+    a target repo's ``knowledge_state``.
+
+    ``knowledge_state`` uses these optional keys::
+
+        has_map     - bool, whether a Knowledge Map exists
+        journeys    - [{"title", "keywords", "modules": [module_id, ...]}]
+        modules     - [{"id", "keywords"}]
+        components  - [{"id", "keywords"}]
+
+    Step kinds: ``map``, ``journey``, ``module``, ``component``, ``metadata``,
+    ``docs``, ``source``.
+
+    Policy:
+      - no map -> docs/source, never retry the missing map;
+      - map first, then:
+          * status/evidence/verification -> module正文 then Metadata;
+          * cross-module -> matching Journey, then its linked Modules;
+          * single-module -> matching Module;
+          * API / lifecycle -> matching Component.
+    """
+    req = request.lower()
+
+    if not knowledge_state.get("has_map"):
+        return ["docs", "source"]
+
+    steps: List[str] = ["map"]
+
+    if _VERIFY_RE.search(request):
+        steps.append("module")
+        steps.append("metadata")
+        return steps
+
+    for journey in knowledge_state.get("journeys") or []:
+        if _matches(req, journey.get("keywords") or []) or _matches(
+            req, [str(journey.get("title", ""))]
+        ):
+            steps.append("journey")
+            if journey.get("modules"):
+                steps.append("module")
+            return steps
+
+    if _first_match_id(req, knowledge_state.get("modules") or [], "id"):
+        steps.append("module")
+        return steps
+
+    if _first_match_id(req, knowledge_state.get("components") or [], "id"):
+        steps.append("component")
+        return steps
+
+    steps.extend(["docs", "source"])
+    return steps

@@ -153,6 +153,75 @@ class TestKnowledgeRouter(unittest.TestCase):
         second = build_knowledge_map(repo)
         self.assertEqual(first, second)
 
+    def test_invalid_document_paths_skipped(self):
+        repo = self._make_repo()
+        _write(
+            repo / "docs" / "70-metadata" / "modules" / "ok" / "module.yaml",
+            "id: ok\ndocument: 30-modules/ok.md\n",
+        )
+        _write(
+            repo / "docs" / "30-modules" / "ok.md",
+            "# OK\n\n## Section\n",
+        )
+        _write(
+            repo / "docs" / "70-metadata" / "modules" / "traversal" / "module.yaml",
+            "id: traversal\ndocument: ../../outside.md\n",
+        )
+        _write(
+            repo / "docs" / "70-metadata" / "modules" / "abs" / "module.yaml",
+            "id: abs\ndocument: /etc/passwd\n",
+        )
+        _write(
+            repo / "docs" / "70-metadata" / "modules" / "wrongroot" / "module.yaml",
+            "id: wrongroot\ndocument: 20-components/x.md\n",
+        )
+        text = build_knowledge_map(repo)
+        self.assertIsNotNone(text)
+        self.assertIn("- ok", text)
+        self.assertIn("Document: docs/30-modules/ok.md", text)
+        self.assertNotIn("- traversal", text)
+        self.assertNotIn("- abs", text)
+        self.assertNotIn("- wrongroot", text)
+
+    def test_glob_indexes_only_expected_manifest(self):
+        repo = self._make_repo()
+        _write(
+            repo / "docs" / "70-metadata" / "modules" / "m" / "module.yaml",
+            "id: m\ndocument: 30-modules/m.md\n",
+        )
+        _write(
+            repo / "docs" / "30-modules" / "m.md",
+            "# M\n\n## S\n",
+        )
+        _write(
+            repo / "docs" / "70-metadata" / "modules" / "stray" / "notes.yaml",
+            "id: stray\ndocument: 30-modules/stray.md\n",
+        )
+        _write(
+            repo / "docs" / "70-metadata" / "components" / "comp" / "notes.yaml",
+            "id: comp\ndocument: 20-components/comp.md\n",
+        )
+        text = build_knowledge_map(repo)
+        self.assertIsNotNone(text)
+        self.assertIn("- m", text)
+        self.assertNotIn("- stray", text)
+        self.assertNotIn("- comp", text)
+
+    def test_journey_relative_and_direct_module_links(self):
+        repo = self._make_repo()
+        _write(
+            repo / "docs" / "40-journeys" / "bg.md",
+            "# Background\n\n"
+            "Relative: [hot-update](../30-modules/hot-update.md)\n"
+            "Direct: [other](docs/30-modules/other.md)\n"
+            "External: [web](https://example.com/x.md)\n"
+            "Anchor: [in](#local)\n"
+            "Mail: [mail](mailto:a@b.com)\n",
+        )
+        text = build_knowledge_map(repo)
+        self.assertIsNotNone(text)
+        self.assertIn("Related modules: hot-update.md, other.md", text)
+
 
 if __name__ == "__main__":
     unittest.main()

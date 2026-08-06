@@ -1,0 +1,98 @@
+[
+  {
+    "id": "bg-download-full-chain",
+    "request": "梳理 Android 后台下载完整链路",
+    "expected_read_sequence": ["map", "journey", "module"],
+    "constraints": ["no_full_repo_scan_first"],
+    "knowledge_state": {
+      "has_map": true,
+      "journeys": [
+        {
+          "title": "后台下载完整链路",
+          "keywords": ["后台下载", "完整链路"],
+          "modules": ["bg-download"]
+        }
+      ],
+      "modules": [
+        {"id": "bg-download", "keywords": ["后台下载", "下载", "下载队列"]}
+      ],
+      "components": [
+        {"id": "BgDownloadService", "keywords": ["BgDownloadService", "生命周期"]}
+      ]
+    }
+  },
+  {
+    "id": "bg-download-lifecycle",
+    "request": "BgDownloadService 的生命周期是什么",
+    "expected_read_sequence": ["map", "component"],
+    "constraints": ["no_full_repo_scan_first"],
+    "knowledge_state": {
+      "has_map": true,
+      "journeys": [
+        {
+          "title": "后台下载完整链路",
+          "keywords": ["后台下载", "完整链路"],
+          "modules": ["bg-download"]
+        }
+      ],
+      "modules": [
+        {"id": "bg-download", "keywords": ["后台下载", "下载"]}
+      ],
+      "components": [
+        {"id": "BgDownloadService", "keywords": ["BgDownloadService", "生命周期"]}
+      ]
+    }
+  },
+  {
+    "id": "conclusion-verified",
+    "request": "这个结论是否已验证？",
+    "expected_read_sequence": ["map", "module", "metadata"],
+    "constraints": [],
+    "knowledge_state": {
+      "has_map": true,
+      "journeys": [
+        {
+          "title": "后台下载完整链路",
+          "keywords": ["后台下载"],
+          "modules": ["bg-download"]
+        }
+      ],
+      "modules": [
+        {"id": "bg-download", "keywords": ["后台下载", "下载"]}
+      ],
+      "components": []
+    }
+  },
+  {
+    "id": "no-knowledge-map",
+    "request": "项目里怎么没有知识地图？直接看代码",
+    "expected_read_sequence": ["docs", "source"],
+    "constraints": ["no_repeat_missing"],
+    "knowledge_state": {
+      "has_map": false,
+      "journeys": [],
+      "modules": [],
+      "components": []
+    }
+  },
+  {
+    "id": "map-match-no-scan-first",
+    "request": "bg-download 模块的实现细节",
+    "expected_read_sequence": ["map", "module"],
+    "constraints": ["no_full_repo_scan_first"],
+    "knowledge_state": {
+      "has_map": true,
+      "journeys": [
+        {
+          "title": "后台下载完整链路",
+          "keywords": ["后台下载", "完整链路"],
+          "modules": ["bg-download"]
+        }
+      ],
+      "modules": [
+        {"id": "bg-download", "keywords": ["bg-download", "实现细节", "下载"]}
+      ],
+      "components": []
+    }
+  }
+]
