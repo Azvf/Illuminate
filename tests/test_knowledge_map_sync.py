@@ -327,5 +327,86 @@ class TestKnowledgeMapSync(unittest.TestCase):
         )
 
 
+    # ── P1-2: fail-safe clean on a corrupt other-harness lock ──
+
+    def test_clean_cursor_keeps_map_when_codex_lock_corrupt(self):
+        """If a remaining harness's lock is corrupt (cannot prove whether it
+        still owns the shared map), clean must NOT delete the map — fail-safe
+        toward keeping a shared artifact it cannot verify is unowned."""
+        repo = self._make_repo()
+        _write(repo / "docs" / "40-journeys" / "a.md", "# Journey A\n\ncross-module.\n")
+        sync_cursor(CORE_PACK, repo)
+        sync_codex(CORE_PACK, repo)
+        self.assertTrue((repo / MAP_REL).exists())
+
+        # Corrupt the codex lock so it cannot be parsed.
+        (repo / ".illuminate" / "codex-lock.json").write_text(
+            "{ this is not valid json", encoding="utf-8"
+        )
+
+        clean_sync(repo)  # cursor clean
+
+        self.assertTrue(
+            (repo / MAP_REL).exists(),
+            "Map must survive Cursor clean when Codex's lock is corrupt",
+        )
+
+    # ── P1-3: healthy state flags an orphan on-disk map ──
+
+    def test_check_flags_orphan_map_when_lock_expects_none(self):
+        """A map file on disk that the lock does not expect (and cannot be
+        derived) must be flagged stale/error instead of a silent healthy pass,
+        since PROJECT_KNOWLEDGE_BLOCK reads it whenever it exists."""
+        repo = self._make_repo()
+        sync_cursor(CORE_PACK, repo)  # no docs -> no map, lock has no hash
+        self.assertFalse((repo / MAP_REL).exists())
+
+        _write(repo / MAP_REL, "# Stale orphan map\n")
+
+        ok, issues = check_sync(CORE_PACK, repo)
+        self.assertFalse(ok, f"Orphan map must be flagged: {issues}")
+        self.assertTrue(
+            any("Knowledge map present" in i for i in issues),
+            f"Expected an orphan-map stale signal in: {issues}",
+        )
+
+    # ── P1-4: resync preserves a hand-placed map ──
+
+    def test_resync_keeps_hand_placed_map_not_recorded_in_any_lock(self):
+        """A .illuminate/knowledge-map.md that no Illuminate sync ever created
+        (no lock records a knowledge_map_hash) must be preserved on resync, not
+        unlinked — Illuminate only deletes files it owns."""
+        repo = self._make_repo()
+        sync_cursor(CORE_PACK, repo)  # no docs -> lock records no map hash
+        _write(repo / MAP_REL, "# Hand-placed map\n")
+
+        sync_cursor(CORE_PACK, repo)  # resync with no docs
+
+        self.assertTrue(
+            (repo / MAP_REL).exists(),
+            "Hand-placed map must survive a resync that records no ownership",
+        )
+        self.assertEqual(
+            (repo / MAP_REL).read_text(encoding="utf-8"), "# Hand-placed map\n"
+        )
+
+    def test_resync_deletes_map_when_lock_records_ownership(self):
+        """A stale map that Illuminate previously created (a lock records its
+        hash) is still deleted on resync after docs are removed — ownership is
+        the deciding factor, not mere existence."""
+        repo = self._make_repo()
+        _write(repo / "docs" / "40-journeys" / "a.md", "# Journey A\n\ncross-module.\n")
+        sync_cursor(CORE_PACK, repo)
+        self.assertTrue((repo / MAP_REL).exists())
+
+        shutil.rmtree(repo / "docs")
+        sync_cursor(CORE_PACK, repo)
+
+        self.assertFalse(
+            (repo / MAP_REL).exists(),
+            "Owned stale map must still be deleted on resync after docs removed",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -72,6 +72,15 @@ def check_knowledge_map(
         issues.append("Knowledge map no longer derivable")
         return
     if not lock_expects_map and not currently_generatable:
+        # The lock does not expect a map and none can be derived, but a stale
+        # or hand-placed map may still linger on disk. PROJECT_KNOWLEDGE_BLOCK
+        # reads `.illuminate/knowledge-map.md` whenever it exists, so a leftover
+        # file would be consumed as authoritative despite the lock not expecting
+        # it. Flag it so it can be cleaned or re-synced.
+        if map_path.exists():
+            issues.append(
+                f"Knowledge map present but not expected: {map_rel} — stale file"
+            )
         return
     # lock_expects_map and currently_generatable: compare hashes.
     if not map_path.exists():
@@ -101,14 +110,42 @@ def preflight_knowledge_map(repo_root: Path, map_path: Path) -> Optional[str]:
 
 def apply_knowledge_map(map_path: Path, map_text: Optional[str]) -> bool:
     """Phase-2 write or delete of the knowledge map using Phase-1's
-    ``map_text``. Returns True when a stale map was deleted."""
+    ``map_text``. Returns True when a stale map was deleted.
+
+    A stale map is only deleted when Illuminate can prove it owns it: some
+    harness lock (in the same .illuminate dir) records a ``knowledge_map_hash``
+    from an earlier sync. A map that no Illuminate sync ever recorded (e.g. a
+    hand-placed file) is preserved rather than unlinked, matching the codebase
+    rule of never deleting content Illuminate does not own.
+    """
     if map_text is not None:
         map_path.parent.mkdir(parents=True, exist_ok=True)
         map_path.write_text(map_text, encoding="utf-8")
         return False
-    if map_path.exists():
+    if map_path.exists() and _lock_records_map(map_path.parent):
         map_path.unlink()
         return True
+    return False
+
+
+def _lock_records_map(lock_dir: Path) -> bool:
+    """Whether any harness lock in ``lock_dir`` records a ``knowledge_map_hash``.
+
+    Used by ``apply_knowledge_map`` to confirm Illuminate previously managed the
+    map before deleting it. A lock that fails to parse is ignored (treated as
+    not recording a hash) so an uncertain record never causes a hand-placed map
+    to be deleted.
+    """
+    for lock_file in HARNESS_LOCK_FILES.values():
+        lock_path = lock_dir / lock_file
+        if not lock_path.exists():
+            continue
+        try:
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if lock.get("knowledge_map_hash"):
+            return True
     return False
 
 
@@ -124,20 +161,25 @@ def other_harness_declares_map(repo_root: Path, harness: str) -> bool:
 
     Used by clean_sync: the current harness's own lock is about to be deleted,
     so the shared map must be kept whenever any remaining harness still owns
-    it. A lock that fails to parse is conservatively ignored (treated as not
-    declaring a map).
+    it. A lock that fails to parse is conservatively treated as possibly
+    declaring a map (return True): clean must not delete a shared map it cannot
+    verify is unowned by every remaining harness.
     """
     for name, lock_file in HARNESS_LOCK_FILES.items():
         if name == harness:
             continue
         lock_path = repo_root / ".illuminate" / lock_file
-        if lock_path.exists():
-            try:
-                lock = json.loads(lock_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            if lock.get("knowledge_map_hash"):
-                return True
+        if not lock_path.exists():
+            continue
+        try:
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            # Fail-safe: cannot prove this harness does not own the map, so
+            # report that it may. Deleting the shared map here would break a
+            # harness that still references it.
+            return True
+        if lock.get("knowledge_map_hash"):
+            return True
     return False
 
 
