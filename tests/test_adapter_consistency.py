@@ -336,7 +336,7 @@ class TestNavigationBlockConsistency(unittest.TestCase):
 
     def test_shared_block_contract(self):
         """The shared navigation block must carry the exact routing contract:
-        the header, the map reference, and the five routing-order lines."""
+        the header, the map reference, and the six routing-order lines."""
         self.assertIn("## Project Knowledge", PROJECT_KNOWLEDGE_BLOCK)
         self.assertIn("`.illuminate/knowledge-map.md`", PROJECT_KNOWLEDGE_BLOCK)
         self.assertIn("Routing order:", PROJECT_KNOWLEDGE_BLOCK)
@@ -345,7 +345,8 @@ class TestNavigationBlockConsistency(unittest.TestCase):
             "2. Module owner document for module behavior",
             "3. Component document for API/lifecycle detail",
             "4. Metadata for claim state, tests, gaps, and evidence",
-            "5. Source code and logs for final verification",
+            "5. CodeGraph for symbol location, call chains, and impact scope",
+            "6. Source code and logs for final verification",
         ]
         for line in order_lines:
             self.assertIn(line, PROJECT_KNOWLEDGE_BLOCK)
@@ -361,7 +362,8 @@ class TestNavigationBlockConsistency(unittest.TestCase):
             "2. Module owner document for module behavior",
             "3. Component document for API/lifecycle detail",
             "4. Metadata for claim state, tests, gaps, and evidence",
-            "5. Source code and logs for final verification",
+            "5. CodeGraph for symbol location, call chains, and impact scope",
+            "6. Source code and logs for final verification",
         ]
         blocks = {
             "cursor": self._cursor_block(),
@@ -391,7 +393,8 @@ class TestNavigationBlockConsistency(unittest.TestCase):
             "2. Module owner document for module behavior",
             "3. Component document for API/lifecycle detail",
             "4. Metadata for claim state, tests, gaps, and evidence",
-            "5. Source code and logs for final verification",
+            "5. CodeGraph for symbol location, call chains, and impact scope",
+            "6. Source code and logs for final verification",
         ]
         for line in order_lines:
             self.assertIn(

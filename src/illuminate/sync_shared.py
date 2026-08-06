@@ -25,7 +25,8 @@ KNOWLEDGE_ROUTING_ORDER = """Routing order:
 2. Module owner document for module behavior
 3. Component document for API/lifecycle detail
 4. Metadata for claim state, tests, gaps, and evidence
-5. Source code and logs for final verification"""
+5. CodeGraph for symbol location, call chains, and impact scope
+6. Source code and logs for final verification"""
 
 PROJECT_KNOWLEDGE_BLOCK = """## Project Knowledge
 
@@ -33,7 +34,19 @@ If `.illuminate/knowledge-map.md` exists, read it before broad source search.
 Otherwise search `docs/20-components`, `docs/30-modules`, and
 `docs/40-journeys` before expanding to source code.
 
-{KNOWLEDGE_ROUTING_ORDER}""".format(KNOWLEDGE_ROUTING_ORDER=KNOWLEDGE_ROUTING_ORDER)
+{KNOWLEDGE_ROUTING_ORDER}
+
+If the target repository has a `.codegraph/` index:
+
+- Prefer CodeGraph for symbol location, call chains, and impact scope. Use the
+  CodeGraph MCP tools when available; otherwise call
+  `codegraph explore "<question>"`.
+- Do not re-run whole-repository Grep/Read after CodeGraph has already
+  returned the relevant context.
+- CodeGraph narrows the source scope; it does not replace logs, tests, or
+  final source verification.
+- When CodeGraph reports stale or delayed index hints, read only the files it
+  points to.""".format(KNOWLEDGE_ROUTING_ORDER=KNOWLEDGE_ROUTING_ORDER)
 
 
 def check_knowledge_map(

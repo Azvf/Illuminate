@@ -84,6 +84,21 @@ class TestMaterializeClaude(unittest.TestCase):
         self.assertIn("deny", settings["permissions"])
         self.assertIn("allow", settings["permissions"])
 
+    def test_settings_allows_codegraph_mcp_tools(self):
+        """CodeGraph MCP tools are allowed individually (least privilege)."""
+        info = materialize_session(CORE_PACK, str(self.tmpdir))
+        settings_path = Path(info["session_dir"]) / "claude-settings.json"
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        allow = settings["permissions"]["allow"]
+        for tool in (
+            "mcp__codegraph__codegraph_context",
+            "mcp__codegraph__codegraph_explore",
+            "mcp__codegraph__codegraph_trace",
+            "mcp__codegraph__codegraph_callers",
+            "mcp__codegraph__codegraph_status",
+        ):
+            self.assertIn(tool, allow)
+
     def test_permissions_only_from_exposed_skills(self):
         """Only expose layer-debug; settings must not include permissions
         from perf-profile or other unexposed skills."""

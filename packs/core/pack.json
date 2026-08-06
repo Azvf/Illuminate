@@ -26,6 +26,7 @@
 
   "references": [
     { "id": "illuminate.code-clarity", "path": "references/code-clarity.md" },
+    { "id": "illuminate.codegraph-integration", "path": "references/codegraph-integration.md" },
     { "id": "illuminate.document-hierarchy", "path": "references/document-hierarchy.md" },
     { "id": "illuminate.evidence-layer", "path": "references/evidence-layer.md" }
   ],

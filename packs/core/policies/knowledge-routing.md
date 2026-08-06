@@ -13,7 +13,14 @@
 3. 跨模块问题先读 Journey，再沿链接进入 Module 和 Component。
 4. 单模块问题先读 Manifest.document 指向的正文。
 5. 有匹配知识时，不得先扫描整个仓库。
-6. 没有匹配项时，再搜索文档标题和正文，然后进入代码搜索。
+6. 若目标仓库存在 `.codegraph/`：
+   - 架构、调用链、符号位置和改动影响问题，优先使用 CodeGraph MCP 工具
+     （`codegraph_explore` 等）；不支持 MCP 的 Harness 使用
+     `codegraph explore "<question>"`。
+   - 不得在 CodeGraph 已返回完整上下文后，再进行全仓库 Grep/Read 重复探索。
+   - CodeGraph 用于缩小源码范围，不替代日志、测试和最终源码验证。
+   - 若 CodeGraph 返回索引延迟或 stale 提示，只直接读取被提示的文件。
+7. 没有匹配项时，再搜索文档标题和正文，然后进入代码搜索。
 
 ## 知识边界
 
