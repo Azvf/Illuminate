@@ -1,28 +1,29 @@
 """Illuminate CLI — main entry point.
 
-Commands:
+Commands (--repo defaults to ".", the current directory):
     illuminate pack validate <pack_dir>
-    illuminate repo inspect --repo <path>
-    illuminate mount create --pack <dir> --repo <path> [--skill <id>...]
+    illuminate repo inspect [--repo <path>]
+    illuminate mount create --pack <dir> [--repo <path>] [--skill <id>...]
     illuminate mount verify <session-dir>
     illuminate mount remove <session-dir-or-id>
-    illuminate run --pack <dir> --repo <path> [--skill <id>...] [--dry-run]
-    illuminate evidence audit --repo <path> [--pretty] [--output <path>]
+    illuminate run [--pack <dir>] [--repo <path>] [--skill <id>...] [--dry-run]
+    illuminate evidence audit [--repo <path>] [--pretty] [--output <path>]
     illuminate compat generate [--pack <dir>]
     illuminate compat check [--pack <dir>]
-    illuminate sync codex --repo <path> [--pack <dir>] [--skill <id>...] [--force]
-    illuminate sync codebuddy --repo <path> [--pack <dir>] [--skill <id>...] [--force]
-    illuminate sync cursor --repo <path> [--pack <dir>] [--skill <id>...] [--agents-compat] [--force]
-    illuminate sync check --repo <path> [--pack <dir>]
-    illuminate sync clean --repo <path>
-    illuminate sync doctor --repo <path> --harness cursor
-    illuminate knowledge pull --repo <path> [--store <dir>] [--manifest <json>]
-    illuminate knowledge status --repo <path> [--store <dir>] [--manifest <json>]
-    illuminate knowledge push --repo <path> [--store <dir>] [--manifest <json>] [--force]
-    illuminate knowledge candidate --repo <path> --source <path> --target <kind> [--anchor <ref>] [--notes <text>] [--replaces <id>] [--store <dir>]
-    illuminate knowledge review --repo <path> --id <id> [--reviewer <name>] [--content <path>] [--notes <text>] [--store <dir>]
-    illuminate knowledge promote --repo <path> --id <id> --pack <dir> [--target-path <path>] [--dry-run] [--force] [--store <dir>]
-    illuminate knowledge reject --repo <path> --id <id> [--reviewer <name>] [--superseded] [--pack <dir>] [--notes <text>] [--store <dir>]
+    illuminate sync codex [--repo <path>] [--pack <dir>] [--skill <id>...] [--force]
+    illuminate sync codebuddy [--repo <path>] [--pack <dir>] [--skill <id>...] [--force]
+    illuminate sync cursor [--repo <path>] [--pack <dir>] [--skill <id>...] [--agents-compat] [--force]
+    illuminate sync check [--repo <path>] [--pack <dir>] [--harness codex|codebuddy|cursor] (auto-detected if omitted)
+    illuminate sync clean [--repo <path>] [--harness codex|codebuddy|cursor]
+    illuminate sync doctor [--repo <path>] [--harness cursor]
+    illuminate codegraph check [--repo <path>] [--timeout <sec>]
+    illuminate knowledge pull [--repo <path>] [--store <dir>] [--manifest <json>]
+    illuminate knowledge status [--repo <path>] [--store <dir>] [--manifest <json>]
+    illuminate knowledge push [--repo <path>] [--store <dir>] [--manifest <json>] [--force]
+    illuminate knowledge candidate [--repo <path>] --source <path> --target <kind> [--anchor <ref>] [--notes <text>] [--replaces <id>] [--store <dir>]
+    illuminate knowledge review [--repo <path>] --id <id> [--reviewer <name>] [--content <path>] [--notes <text>] [--store <dir>]
+    illuminate knowledge promote [--repo <path>] --id <id> --pack <dir> [--target-path <path>] [--dry-run] [--force] [--store <dir>]
+    illuminate knowledge reject [--repo <path>] --id <id> [--reviewer <name>] [--superseded] [--pack <dir>] [--notes <text>] [--store <dir>]
     illuminate docs export-human --source <dir> --output <dir> [--config <json>]
     illuminate docs lint-human --source <dir> [--config <json>] [--all-markdown]
     illuminate docs lint-knowledge --source <dir> [--config <json>]
@@ -41,6 +42,7 @@ from .materialize_claude import materialize_session, launch_session
 from .evidence.audit import run_audit
 from .lockfile import load_lock, verify_lock
 from .compat import compat_generate, compat_check
+from .codegraph import check_codegraph
 from .sync_codex import sync_codex, check_sync as check_codex_sync, clean_sync as clean_codex_sync
 from .sync_codebuddy import sync_codebuddy, check_sync as check_codebuddy_sync, clean_sync as clean_codebuddy_sync
 from .sync_cursor import (
@@ -95,7 +97,7 @@ def _build_parser():
 
     c = ps.add_parser("create", help="Create a Claude Code session mount")
     c.add_argument("--pack", required=True, help="Path to the pack directory")
-    c.add_argument("--repo", required=True, help="Target repository path")
+    c.add_argument("--repo", default=".", help="Target repository path")
     c.add_argument("--skill", action="append", default=None,
                    help="Skill ID to expose (repeatable)")
 
@@ -107,8 +109,8 @@ def _build_parser():
 
     # run
     p = sub.add_parser("run", help="Materialize and launch a Claude Code session")
-    p.add_argument("--pack", required=True, help="Path to the pack directory")
-    p.add_argument("--repo", required=True, help="Target repository path")
+    p.add_argument("--pack", default="packs/core", help="Path to the pack directory")
+    p.add_argument("--repo", default=".", help="Target repository path")
     p.add_argument("--skill", action="append", default=None,
                    help="Skill ID to expose (repeatable)")
     p.add_argument("--dry-run", action="store_true",
@@ -139,7 +141,7 @@ def _build_parser():
 
     sc = ps.add_parser("codex", help="Synchronize for Codex App (AGENTS.md + .agents/skills + openai.yaml)")
     sc.add_argument("--pack", default="packs/core", help="Pack directory path")
-    sc.add_argument("--repo", required=True, help="Target repository path")
+    sc.add_argument("--repo", default=".", help="Target repository path")
     sc.add_argument("--skill", action="append", default=None,
                     help="Skill ID to sync (repeatable; default: all non-alias)")
     sc.add_argument("--force", action="store_true",
@@ -147,7 +149,7 @@ def _build_parser():
 
     scb = ps.add_parser("codebuddy", help="Synchronize for CodeBuddy (.codebuddy/rules/illuminate/ + skills + commands)")
     scb.add_argument("--pack", default="packs/core", help="Pack directory path")
-    scb.add_argument("--repo", required=True, help="Target repository path")
+    scb.add_argument("--repo", default=".", help="Target repository path")
     scb.add_argument("--skill", action="append", default=None,
                      help="Skill ID to sync (repeatable; default: all non-alias)")
     scb.add_argument("--force", action="store_true",
@@ -155,7 +157,7 @@ def _build_parser():
 
     scu = ps.add_parser("cursor", help="Synchronize for Cursor (.cursor/rules + .cursor/skills + commands)")
     scu.add_argument("--pack", default="packs/core", help="Pack directory path")
-    scu.add_argument("--repo", required=True, help="Target repository path")
+    scu.add_argument("--repo", default=".", help="Target repository path")
     scu.add_argument("--skill", action="append", default=None,
                      help="Skill ID to sync (repeatable; default: all non-alias)")
     scu.add_argument("--agents-compat", action="store_true",
@@ -166,42 +168,50 @@ def _build_parser():
 
     sch = ps.add_parser("check", help="Verify sync integrity for Codex, CodeBuddy, or Cursor")
     sch.add_argument("--pack", default="packs/core", help="Pack directory path")
-    sch.add_argument("--repo", required=True, help="Target repository path")
-    sch.add_argument("--harness", choices=["codex", "codebuddy", "cursor"], default="codex",
-                     help="Harness to check (default: codex)")
+    sch.add_argument("--repo", default=".", help="Target repository path")
+    sch.add_argument("--harness", choices=["codex", "codebuddy", "cursor"], default=None,
+                     help="Harness to check (auto-detected from <repo>/.illuminate locks if omitted)")
 
     scl = ps.add_parser("clean", help="Remove all Illuminate-synced artifacts from a repository")
-    scl.add_argument("--repo", required=True, help="Target repository path")
+    scl.add_argument("--repo", default=".", help="Target repository path")
     scl.add_argument("--harness", choices=["codex", "codebuddy", "cursor"], default="codex",
                      help="Harness to clean (default: codex)")
 
     sdo = ps.add_parser("doctor", help="Read-only diagnostic of a repository sync state")
-    sdo.add_argument("--repo", required=True, help="Target repository path")
+    sdo.add_argument("--repo", default=".", help="Target repository path")
     sdo.add_argument("--harness", choices=["cursor"], default="cursor",
                      help="Harness to diagnose (only 'cursor' is currently supported)")
+
+    # codegraph check
+    p = sub.add_parser("codegraph", help="CodeGraph CLI boundary operations")
+    ps = p.add_subparsers(dest="codegraph_command")
+    cgc = ps.add_parser("check", help="Read-only diagnostic of a repository's CodeGraph state")
+    cgc.add_argument("--repo", default=".", help="Target repository path")
+    cgc.add_argument("--timeout", type=float, default=10.0,
+                     help="Timeout in seconds for `codegraph status` (default: 10)")
 
     # knowledge pull / status / push
     p = sub.add_parser("knowledge", help="Knowledge store operations")
     ps = p.add_subparsers(dest="knowledge_command")
 
     kp = ps.add_parser("pull", help="Pull project knowledge docs to central store")
-    kp.add_argument("--repo", required=True, help="Target repository path")
+    kp.add_argument("--repo", default=".", help="Target repository path")
     kp.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
     kp.add_argument("--manifest", default=None, help="Knowledge manifest JSON path")
 
     ks = ps.add_parser("status", help="Compare project knowledge docs with central store")
-    ks.add_argument("--repo", required=True, help="Target repository path")
+    ks.add_argument("--repo", default=".", help="Target repository path")
     ks.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
     ks.add_argument("--manifest", default=None, help="Knowledge manifest JSON path")
 
     kpush = ps.add_parser("push", help="Push store documents back to project (recovery)")
-    kpush.add_argument("--repo", required=True, help="Target repository path")
+    kpush.add_argument("--repo", default=".", help="Target repository path")
     kpush.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
     kpush.add_argument("--manifest", default=None, help="Knowledge manifest JSON path")
     kpush.add_argument("--force", action="store_true", help="Override conflicts")
 
     kc = ps.add_parser("candidate", help="Create a promotion candidate from a knowledge source")
-    kc.add_argument("--repo", required=True, help="Target repository path")
+    kc.add_argument("--repo", default=".", help="Target repository path")
     kc.add_argument("--source", required=True, help="Source knowledge path relative to repo/docs/")
     kc.add_argument("--target", required=True, choices=["policy", "skill", "reference", "evidence"],
                     help="Target pack content kind")
@@ -213,7 +223,7 @@ def _build_parser():
     kc.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
 
     kr = ps.add_parser("review", help="Record a review verdict for a candidate")
-    kr.add_argument("--repo", required=True, help="Target repository path")
+    kr.add_argument("--repo", default=".", help="Target repository path")
     kr.add_argument("--id", required=True, help="Candidate ID")
     kr.add_argument("--reviewer", default=None, help="Reviewer name")
     kr.add_argument("--content", default=None, help="Generalized draft file path (CWD-relative; binds reviewed bytes to the draft instead of the source)")
@@ -221,7 +231,7 @@ def _build_parser():
     kr.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
 
     kpm = ps.add_parser("promote", help="Promote a reviewed candidate into a pack")
-    kpm.add_argument("--repo", required=True, help="Target repository path")
+    kpm.add_argument("--repo", default=".", help="Target repository path")
     kpm.add_argument("--id", required=True, help="Candidate ID")
     kpm.add_argument("--pack", required=True, help="Pack directory to promote into")
     kpm.add_argument("--target-path", default=None, help="Pack-relative target path (default: <kind>s/<source path>)")
@@ -230,7 +240,7 @@ def _build_parser():
     kpm.add_argument("--store", default=None, help="Central store directory (default: ~/.illuminate/knowledge)")
 
     krj = ps.add_parser("reject", help="Reject a candidate (optionally superseded)")
-    krj.add_argument("--repo", required=True, help="Target repository path")
+    krj.add_argument("--repo", default=".", help="Target repository path")
     krj.add_argument("--id", required=True, help="Candidate ID")
     krj.add_argument("--reviewer", default=None, help="Reviewer name")
     krj.add_argument("--superseded", action="store_true", help="Mark the candidate as superseded")
@@ -573,6 +583,19 @@ def _cmd_sync_cursor(args):
     return 0
 
 
+_SYNC_HARNESS_LOCKS = [
+    ("codex", "codex-lock.json"),
+    ("codebuddy", "codebuddy-lock.json"),
+    ("cursor", "cursor-lock.json"),
+]
+
+
+def _detect_synced_harnesses(repo_root):
+    """Return harnesses with a lock file under <repo>/.illuminate/, in stable order."""
+    lock_dir = repo_root / ".illuminate"
+    return [name for name, lock in _SYNC_HARNESS_LOCKS if (lock_dir / lock).exists()]
+
+
 def _cmd_sync_check(args):
     pack_dir = Path(args.pack).resolve()
     repo = Path(args.repo).resolve()
@@ -584,23 +607,44 @@ def _cmd_sync_check(args):
         print(f"Error: repository not found: {repo}", file=sys.stderr)
         return 1
 
-    if getattr(args, 'harness', 'codex') == 'codebuddy':
-        ok, issues = check_codebuddy_sync(pack_dir, repo)
-        label = "CodeBuddy"
-    elif getattr(args, 'harness', 'codex') == 'cursor':
-        ok, issues = check_cursor_sync(pack_dir, repo)
-        label = "Cursor"
+    if args.harness:
+        harnesses = [args.harness]
     else:
-        ok, issues = check_codex_sync(pack_dir, repo)
-        label = "Codex"
+        lock_dir = repo / ".illuminate"
+        if lock_dir.exists() and not lock_dir.is_dir():
+            print(f"Error: {lock_dir} exists but is not a directory", file=sys.stderr)
+            return 1
+        harnesses = _detect_synced_harnesses(repo)
+        if not harnesses:
+            print("No harness synced yet — run 'illuminate sync <harness>' first.", file=sys.stderr)
+            return 1
 
-    if ok:
-        print(f"Sync check ({label}): PASSED", file=sys.stderr)
-        return 0
-    print(f"Sync check ({label}): FAILED", file=sys.stderr)
-    for issue in issues:
-        print(f"  - {issue}", file=sys.stderr)
-    return 1
+    failed = False
+    for harness in harnesses:
+        if harness == 'codebuddy':
+            label, checker = "CodeBuddy", check_codebuddy_sync
+        elif harness == 'cursor':
+            label, checker = "Cursor", check_cursor_sync
+        else:
+            label, checker = "Codex", check_codex_sync
+        try:
+            ok, issues = checker(pack_dir, repo)
+        except Exception as exc:
+            # Fail-closed per harness: a corrupt lock must not abort the
+            # remaining harnesses' checks nor surface a traceback.
+            failed = True
+            print(f"Sync check ({label}): FAILED", file=sys.stderr)
+            print(f"  - {exc}", file=sys.stderr)
+            continue
+
+        if ok:
+            print(f"Sync check ({label}): PASSED", file=sys.stderr)
+        else:
+            failed = True
+            print(f"Sync check ({label}): FAILED", file=sys.stderr)
+            for issue in issues:
+                print(f"  - {issue}", file=sys.stderr)
+    return 1 if failed else 0
 
 
 def _cmd_sync_clean(args):
@@ -681,6 +725,34 @@ def _cmd_sync_doctor(args):
         print(f"Cursor sync doctor: HEALTHY", file=sys.stderr)
         return 0
     print(f"Cursor sync doctor: PROBLEMS DETECTED", file=sys.stderr)
+    return 1
+
+
+def _cmd_codegraph_check(args):
+    repo = Path(args.repo).resolve()
+    if not repo.exists():
+        print(f"Error: repository not found: {repo}", file=sys.stderr)
+        return 1
+
+    report = check_codegraph(repo, timeout=args.timeout)
+
+    print(f"CodeGraph check: {repo}", file=sys.stderr)
+    print(f"  CLI:           {'found' if report['cli_available'] else 'not found'}", file=sys.stderr)
+    print(f"  Graph index:   {'present' if report['graph_dir_exists'] else 'absent'}", file=sys.stderr)
+    if report.get("graph_dir"):
+        print(f"    dir:         {report['graph_dir']}", file=sys.stderr)
+    if isinstance(report.get("status"), dict):
+        for key in list(report["status"].keys())[:6]:
+            print(f"    {key}:        {report['status'][key]}", file=sys.stderr)
+    if report.get("status_error"):
+        print(f"  Status error:  {report['status_error']}", file=sys.stderr)
+
+    if not report["issues"]:
+        print(f"CodeGraph check: HEALTHY", file=sys.stderr)
+        return 0
+    print(f"CodeGraph check: PROBLEMS DETECTED", file=sys.stderr)
+    for issue in report["issues"]:
+        print(f"  - {issue}", file=sys.stderr)
     return 1
 
 
@@ -973,6 +1045,7 @@ _DISPATCH = {
     ("sync", "check"): _cmd_sync_check,
     ("sync", "clean"): _cmd_sync_clean,
     ("sync", "doctor"): _cmd_sync_doctor,
+    ("codegraph", "check"): _cmd_codegraph_check,
     ("knowledge", "pull"): _cmd_knowledge_pull,
     ("knowledge", "status"): _cmd_knowledge_status,
     ("knowledge", "push"): _cmd_knowledge_push,
