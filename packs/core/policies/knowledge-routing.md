@@ -4,7 +4,7 @@
 
 开始广泛搜索源码或分析实现前，先检查项目知识导航。
 
-1. 优先读取项目 Knowledge Map。
+1. 若存在项目 Knowledge Map，优先读取。
 2. 根据任务类型查找知识：
    - 组件/API/生命周期 → docs/20-components/
    - 单模块职责、状态和功能链路 → docs/30-modules/

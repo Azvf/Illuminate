@@ -28,7 +28,7 @@ def _get_repo_display(mount_plan) -> str:
     return str(raw)
 
 
-def _generate_claude_md(pack_dir, mount_plan):
+def _generate_claude_md(pack_dir, mount_plan, has_map):
     manifest = load_pack_manifest(pack_dir)
     policy_index = load_policy_index(pack_dir, manifest)
 
@@ -64,10 +64,16 @@ def _generate_claude_md(pack_dir, mount_plan):
     lines.append("")
     lines.append("## Project Knowledge")
     lines.append("")
-    lines.append(
-        "Read `project-knowledge-map.md` before broad repository search."
-    )
-    lines.append("Paths inside the map are relative to the target repository root.")
+    if has_map:
+        lines.append(
+            "Read `project-knowledge-map.md` before broad repository search."
+        )
+        lines.append("Paths inside the map are relative to the target repository root.")
+    else:
+        lines.append(
+            "No project knowledge map is present. Search `docs/20-components`, "
+            "`docs/30-modules`, and `docs/40-journeys` before expanding to source code."
+        )
     lines.append("")
     lines.append(KNOWLEDGE_ROUTING_ORDER)
     lines.append("")
@@ -173,8 +179,14 @@ def materialize_session(pack_dir, repo, skill_filter=None):
     session_dir = _get_session_base() / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
 
+    # Determine whether the target repo yields a knowledge map before writing
+    # CLAUDE.md, so its navigation section is conditional on map presence.
+    from .knowledge_router import build_knowledge_map
+    repo_path = Path(mount_plan["repo"]["path"]) if isinstance(mount_plan["repo"], dict) else Path(mount_plan["repo"])
+    has_map = build_knowledge_map(repo_path) is not None
+
     # Generate CLAUDE.md
-    claude_md = _generate_claude_md(pack_dir, mount_plan)
+    claude_md = _generate_claude_md(pack_dir, mount_plan, has_map)
     (session_dir / "CLAUDE.md").write_text(claude_md, encoding="utf-8")
 
     # Copy files (skill filtering happens inside resolve_file_list)
@@ -190,7 +202,6 @@ def materialize_session(pack_dir, repo, skill_filter=None):
     # Knowledge Map: written into the session dir (never the target repo).
     # Returns None when the target repo has no indexable knowledge (no file).
     knowledge_map_written = False
-    repo_path = Path(mount_plan["repo"]["path"]) if isinstance(mount_plan["repo"], dict) else Path(mount_plan["repo"])
     from .knowledge_router import write_knowledge_map
     if write_knowledge_map(repo_path, session_dir / "project-knowledge-map.md") is not None:
         knowledge_map_written = True

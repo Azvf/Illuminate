@@ -33,12 +33,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from .command_catalog import build_command_catalog
-from .knowledge_router import write_knowledge_map
 from .sync_shared import (
+    apply_knowledge_map,
     build_agents_block,
     check_knowledge_map,
     check_managed_file_hashes,
     ensure_writable,
+    other_harness_declares_map,
+    preflight_knowledge_map,
     preflight_managed_command_tree,
     preflight_managed_skill_tree,
     remove_empty_parent_dirs,
@@ -450,6 +452,8 @@ def sync_cursor(
     )
     _preflight_target_paths(repo_root, lock, agents_compat)
     _preflight_mode_switch(repo_root, lock, agents_compat)
+    map_path = repo_root / _LOCK_DIR / "knowledge-map.md"
+    map_text = preflight_knowledge_map(repo_root, map_path)
 
     # 4. Phase 2 — write. The rules artifact is handled as a mode transaction:
     #    write the new-mode artifact first, then clean the old-mode artifact.
@@ -490,12 +494,12 @@ def sync_cursor(
         rules_artifact_hash = hash_file(rules_path)
         _remove_old_agents_block(repo_root, lock)
 
-    # Generate the Knowledge Map before writing the lock. If there is no
-    # indexable knowledge, write_knowledge_map returns None and no map file or
-    # hash is recorded. The lock stores the hash of the canonical map text, so
-    # check_sync can compare against a rebuilt text hash regardless of the
+    # Write or delete the Knowledge Map (preflighted in Phase 1) before the
+    # lock. If there is no indexable knowledge, the stale map is removed and
+    # no hash is recorded. The lock stores the hash of the canonical map text,
+    # so check_sync can compare against a rebuilt text hash regardless of the
     # platform line endings of the on-disk file.
-    map_text = write_knowledge_map(repo_root, repo_root / _LOCK_DIR / "knowledge-map.md")
+    apply_knowledge_map(map_path, map_text)
     knowledge_map_hash = hash_string(map_text) if map_text is not None else None
 
     # Write lock
@@ -567,13 +571,12 @@ def check_sync(pack_dir: Path, repo_root: Path) -> Tuple[bool, List[str]]:
             if actual != lock["rules_md_hash"]:
                 issues.append(f"{_RULES_REL} hash mismatch — run sync again")
 
-    # Check the Knowledge Map when the lock declared one. check is read-only:
-    # the shared helper rebuilds the map text and compares its hash to the
-    # lock record, so a doc added/moved/removed after sync is flagged even
-    # though the on-disk map file was not regenerated.
+    # Check the Knowledge Map against the lock's expected state (present or
+    # absent). check is read-only: the shared helper rebuilds the map text and
+    # compares its hash to the lock record, so a doc added/moved/removed after
+    # sync is flagged even though the on-disk map file was not regenerated.
     expected_map_hash = lock.get("knowledge_map_hash")
-    if expected_map_hash:
-        check_knowledge_map(repo_root, expected_map_hash, f"{_LOCK_DIR}/knowledge-map.md", issues)
+    check_knowledge_map(repo_root, expected_map_hash, f"{_LOCK_DIR}/knowledge-map.md", issues)
 
     # Check skills via the shared helper
     check_managed_file_hashes(
@@ -657,9 +660,14 @@ def doctor_sync(repo_root: Path) -> dict:
         report["rules"] = {"path": label, "exists": False, "hash_matches": False, "always_apply": None}
     else:
         expected = lock.get(key)
-        actual = hash_file(rules_path)
         always_apply = None  # AGENTS.md is always loaded, so N/A in compat mode
-        if not agents_compat:
+        if agents_compat:
+            # Compare the block hash, matching check_sync, so user content
+            # outside the markers never causes a false mismatch.
+            content = rules_path.read_text(encoding="utf-8")
+            actual = hash_block_text(content)
+        else:
+            actual = hash_file(rules_path)
             text = rules_path.read_text(encoding="utf-8")
             always_apply = bool(re.search(r"(?m)^alwaysApply:\s*true", text))
         report["rules"] = {
@@ -793,8 +801,11 @@ def clean_sync(repo_root: Path) -> dict:
                         agents_path.write_text(new_content, encoding="utf-8")
                         removed.append("AGENTS.md illuminate block")
 
-    # Remove the knowledge map (a managed artifact when the lock records a hash)
-    if lock.get("knowledge_map_hash"):
+    # Remove the knowledge map when the lock records a hash AND no other
+    # harness still owns it. The shared map may be written by cursor/codex/
+    # codebuddy together, so cleaning one harness must not delete a map that
+    # another harness still references.
+    if lock.get("knowledge_map_hash") and not other_harness_declares_map(repo_root, "cursor"):
         map_path = repo_root / _LOCK_DIR / "knowledge-map.md"
         if map_path.exists():
             map_path.unlink()

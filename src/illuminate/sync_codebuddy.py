@@ -26,14 +26,16 @@ from .managed_block import (
     remove_block,
 )
 from .command_catalog import build_command_catalog
-from .knowledge_router import write_knowledge_map
 from .manifest import load_policy_index
 from .resolve import resolve_pack
 from .sync_shared import (
     PROJECT_KNOWLEDGE_BLOCK,
+    apply_knowledge_map,
     check_knowledge_map,
     check_managed_file_hashes,
     ensure_writable,
+    other_harness_declares_map,
+    preflight_knowledge_map,
     preflight_managed_command_tree,
     preflight_managed_skill_tree,
     sync_managed_command_tree,
@@ -330,6 +332,8 @@ def sync_codebuddy(
         repo_root / _COMMANDS_DIR, desired_commands, previous_commands or {}
     )
     _preflight_target_paths(repo_root)
+    map_path = repo_root / _LOCK_DIR / "knowledge-map.md"
+    map_text = preflight_knowledge_map(repo_root, map_path)
 
     # 4. Phase 2 — write.
     rule_hashes = _sync_rules(pack_dir, repo_root, manifest)
@@ -346,10 +350,11 @@ def sync_codebuddy(
     codebuddy_path.write_text(new_content, encoding="utf-8")
     codebuddy_hash = hash_file(codebuddy_path)
 
-    # Knowledge Map: written into the lock dir before the lock is persisted.
-    # The lock records the hash of the map *text* (not the file on disk) so a
-    # later check can re-derive the text and compare against a fresh build.
-    map_text = write_knowledge_map(repo_root, repo_root / _LOCK_DIR / "knowledge-map.md")
+    # Knowledge Map: written or deleted (preflighted in Phase 1) into the lock
+    # dir before the lock is persisted. The lock records the hash of the map
+    # *text* (not the file on disk) so a later check can re-derive the text
+    # and compare against a fresh build.
+    apply_knowledge_map(map_path, map_text)
     knowledge_map_hash = hash_string(map_text) if map_text is not None else None
 
     # Write lock
@@ -420,13 +425,12 @@ def check_sync(pack_dir: Path, repo_root: Path) -> Tuple[bool, List[str]]:
         if actual != lock["codebuddy_md_hash"]:
             issues.append("CODEBUDDY.md hash mismatch")
 
-    # Check Knowledge Map (only when the lock records a hash for it). The
-    # stale check re-derives the map text and compares its hash against the
-    # lock, so a docs/ change after sync (a new journey, etc.) is flagged even
-    # though the on-disk map file is unchanged.
+    # Check Knowledge Map against the lock's expected state (present or
+    # absent). The stale check re-derives the map text and compares its hash
+    # against the lock, so a docs/ change after sync (a new journey, etc.) is
+    # flagged even though the on-disk map file is unchanged.
     map_hash = lock.get("knowledge_map_hash")
-    if map_hash:
-        check_knowledge_map(repo_root, map_hash, f"{_LOCK_DIR}/knowledge-map.md", issues)
+    check_knowledge_map(repo_root, map_hash, f"{_LOCK_DIR}/knowledge-map.md", issues)
 
     return (len(issues) == 0), issues
 
@@ -487,8 +491,11 @@ def clean_sync(repo_root: Path) -> dict:
             codebuddy_path.write_text(new_content, encoding="utf-8")
             removed.append("CODEBUDDY.md illuminate block")
 
-    # Remove knowledge map (a managed artifact when the lock records a hash)
-    if has_lock and lock.get("knowledge_map_hash"):
+    # Remove knowledge map when the lock records a hash AND no other harness
+    # still owns it. The shared map may be written by cursor/codex/codebuddy
+    # together, so cleaning one harness must not delete a map that another
+    # harness still references.
+    if has_lock and lock.get("knowledge_map_hash") and not other_harness_declares_map(repo_root, "codebuddy"):
         map_path = repo_root / _LOCK_DIR / "knowledge-map.md"
         if map_path.exists():
             map_path.unlink()

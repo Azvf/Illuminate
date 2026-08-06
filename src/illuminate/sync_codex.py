@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from .hashutil import hash_file, hash_directory, hash_string, lock_hash
-from .knowledge_router import write_knowledge_map
 from .lockfile import build_lock_envelope
 from .managed_block import (
     BEGIN_MARKER as _BEGIN_MARKER,
@@ -26,9 +25,12 @@ from .managed_block import (
 )
 from .resolve import resolve_pack
 from .sync_shared import (
+    apply_knowledge_map,
     build_agents_block,
     check_knowledge_map,
     check_managed_file_hashes,
+    other_harness_declares_map,
+    preflight_knowledge_map,
     remove_empty_parent_dirs,
     sync_managed_skill_tree,
 )
@@ -241,17 +243,23 @@ def sync_codex(
     contracts = resolved["contracts"]
     exposed = set(resolved["skills"]["exposed"])
 
-    # 3. Sync .agents/skills/ first (lock-owned; project-owned skills
+    # 3. Phase 1 preflight: the knowledge map write/delete must pass before
+    #    any repo modification, so a read-only map or un-deletable stale map
+    #    leaves no partial write behind.
+    map_path = repo_root / ".illuminate" / "knowledge-map.md"
+    map_text = preflight_knowledge_map(repo_root, map_path)
+
+    # 4. Sync .agents/skills/ first (lock-owned; project-owned skills
     # preserved; collisions fail closed before any repo modification)
     skill_files = _sync_skills(pack_dir, repo_root, manifest, exposed)
 
-    # 4. Merge AGENTS.md
+    # 5. Merge AGENTS.md
     agents_path = repo_root / "AGENTS.md"
     block_text = build_agents_block(pack_dir, manifest, exposed)
     new_content, agents_modified = merge_agents_block(agents_path, block_text)
     agents_path.write_text(new_content, encoding="utf-8")
 
-    # 5. Generate agents/openai.yaml for each exposed skill
+    # 6. Generate agents/openai.yaml for each exposed skill
     contracts_by_id = {c["id"]: c for c in contracts}
     openai_yamls: Dict[str, str] = {}
     for entry in manifest.get("skills", []):
@@ -270,15 +278,15 @@ def sync_codex(
             yaml_files.append("agents/openai.yaml")
         openai_yamls[skill_name] = yaml_content
 
-    # 6. Generate the Knowledge Map before writing the lock. If there is no
-    # indexable knowledge, write_knowledge_map returns None and no map file or
-    # hash is recorded. The lock stores the hash of the canonical map text, so
-    # check_sync can compare against a rebuilt text hash regardless of the
-    # platform line endings of the on-disk file.
-    map_text = write_knowledge_map(repo_root, repo_root / ".illuminate" / "knowledge-map.md")
+    # 7. Write or delete the Knowledge Map (preflighted in Phase 1) before
+    # the lock. If there is no indexable knowledge, the stale map is removed
+    # and no hash is recorded. The lock stores the hash of the canonical map
+    # text, so check_sync can compare against a rebuilt text hash regardless
+    # of the platform line endings of the on-disk file.
+    apply_knowledge_map(map_path, map_text)
     knowledge_map_hash = hash_string(map_text) if map_text is not None else None
 
-    # 7. Generate lock
+    # 8. Generate lock
     lock = _create_codex_lock(repo_root, pack_dir, manifest, exposed, skill_files, knowledge_map_hash)
 
     return {
@@ -352,13 +360,13 @@ def check_sync(
             repo_root, ".agents/skills", lock.get("skills", []), issues
         )
 
-        # Verify the Knowledge Map when the lock declared one. check is
-        # read-only: the shared helper rebuilds the map text and compares its
-        # hash to the lock record, so a doc added/moved/removed after sync is
-        # flagged even though the on-disk map file was not regenerated.
+        # Verify the Knowledge Map against the lock's expected state (present
+        # or absent). check is read-only: the shared helper rebuilds the map
+        # text and compares its hash to the lock record, so a doc
+        # added/moved/removed after sync is flagged even though the on-disk
+        # map file was not regenerated.
         expected_map_hash = lock.get("knowledge_map_hash")
-        if expected_map_hash:
-            check_knowledge_map(repo_root, expected_map_hash, ".illuminate/knowledge-map.md", issues)
+        check_knowledge_map(repo_root, expected_map_hash, ".illuminate/knowledge-map.md", issues)
 
     return (len(issues) == 0), issues
 
@@ -402,8 +410,11 @@ def clean_sync(repo_root: Path) -> dict:
     if skills_dir.exists():
         removed.extend(remove_empty_parent_dirs(skills_dir, repo_root))
 
-    # Remove the knowledge map (a managed artifact when the lock records a hash)
-    if (lock or {}).get("knowledge_map_hash"):
+    # Remove the knowledge map when the lock records a hash AND no other
+    # harness still owns it. The shared map may be written by cursor/codex/
+    # codebuddy together, so cleaning one harness must not delete a map that
+    # another harness still references.
+    if (lock or {}).get("knowledge_map_hash") and not other_harness_declares_map(repo_root, "codex"):
         map_path = repo_root / ".illuminate" / "knowledge-map.md"
         if map_path.exists():
             map_path.unlink()

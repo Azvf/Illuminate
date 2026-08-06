@@ -355,7 +355,7 @@ class TestNavigationBlockConsistency(unittest.TestCase):
         shared navigation block verbatim (all its key substrings present)."""
         shared_substrings = [
             "## Project Knowledge",
-            "Before broad source search, read `.illuminate/knowledge-map.md`.",
+            "If `.illuminate/knowledge-map.md` exists, read it before broad source search.",
             "Routing order:",
             "1. Journey for cross-module behavior",
             "2. Module owner document for module behavior",
@@ -377,11 +377,15 @@ class TestNavigationBlockConsistency(unittest.TestCase):
 
     def test_claude_block_carries_navigation_rule(self):
         """The Claude session CLAUDE.md carries the same routing order as the
-        shared block (pointing at its own session-local map path), so claude
-        also routes to knowledge before broad search."""
+        shared block. The navigation is conditional: a repo with no knowledge
+        map gets the docs-search fallback instead of an unconditional map read.
+        """
         block = self._claude_block()
         self.assertIn("## Project Knowledge", block)
-        self.assertIn("project-knowledge-map.md", block)
+        # No docs in the empty temp repo -> fallback to docs-dir search.
+        self.assertIn("docs/20-components", block)
+        self.assertIn("docs/30-modules", block)
+        self.assertIn("docs/40-journeys", block)
         order_lines = [
             "1. Journey for cross-module behavior",
             "2. Module owner document for module behavior",
@@ -394,6 +398,19 @@ class TestNavigationBlockConsistency(unittest.TestCase):
                 line, block,
                 f"claude block missing routing order line: {line!r}",
             )
+
+    def test_claude_block_carries_map_when_repo_has_docs(self):
+        """When the target repo has docs (a knowledge map is derivable), the
+        Claude session CLAUDE.md references the session-local map path."""
+        repo = tempfile.mkdtemp()
+        (Path(repo) / "docs" / "40-journeys").mkdir(parents=True, exist_ok=True)
+        (Path(repo) / "docs" / "40-journeys" / "a.md").write_text(
+            "# Journey A\n\ncross-module.\n", encoding="utf-8"
+        )
+        info = materialize_session(CORE_PACK, repo)
+        block = (Path(info["session_dir"]) / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertIn("## Project Knowledge", block)
+        self.assertIn("project-knowledge-map.md", block)
 
     def test_all_blocks_have_projection_knowledge_header(self):
         """The one substring common to every adapter's block is the section

@@ -799,6 +799,22 @@ class TestSyncCursor(unittest.TestCase):
         self.assertFalse(report["lock_exists"])
         self.assertNotEqual(report["errors"], [])
 
+    def test_doctor_compat_uses_block_hash_with_outer_content(self):
+        """doctor_sync in compat mode compares the AGENTS.md block hash, so
+        user content outside the markers does not cause a false mismatch."""
+        repo = self._make_repo()
+        agents_path = repo / "AGENTS.md"
+        agents_path.write_text("# Project\n", encoding="utf-8")
+        sync_cursor(CORE_PACK, repo, agents_compat=True)
+        agents_path.write_text(
+            agents_path.read_text(encoding="utf-8") + "\n\nUser notes.\n",
+            encoding="utf-8",
+        )
+        report = doctor_sync(repo)
+        self.assertEqual(report["mode"], "agents")
+        self.assertTrue(report["rules"]["exists"])
+        self.assertTrue(report["rules"]["hash_matches"])
+
     def test_doctor_never_writes_files(self):
         repo = self._make_repo()
         sync_cursor(CORE_PACK, repo)

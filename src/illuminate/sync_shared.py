@@ -6,10 +6,11 @@ Behavior changes here must keep every harness adapter consistent — do not
 special-case one adapter.
 """
 
+import json
 import os
 import shutil
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 from .hashutil import hash_file, hash_string
 from .knowledge_router import build_knowledge_map
@@ -28,34 +29,116 @@ KNOWLEDGE_ROUTING_ORDER = """Routing order:
 
 PROJECT_KNOWLEDGE_BLOCK = """## Project Knowledge
 
-Before broad source search, read `.illuminate/knowledge-map.md`.
+If `.illuminate/knowledge-map.md` exists, read it before broad source search.
+Otherwise search `docs/20-components`, `docs/30-modules`, and
+`docs/40-journeys` before expanding to source code.
 
 {KNOWLEDGE_ROUTING_ORDER}""".format(KNOWLEDGE_ROUTING_ORDER=KNOWLEDGE_ROUTING_ORDER)
 
 
 def check_knowledge_map(
     repo_root: Path,
-    expected_hash: str,
+    expected_hash: Optional[str],
     map_rel: str,
     issues: List[str],
 ) -> None:
-    """Append Knowledge Map staleness issues when the lock declared a map.
+    """Append Knowledge Map staleness issues for the four explicit states.
 
-    check is read-only: rebuild the map text from the current repo state and
-    compare its hash against the lock record. A doc added/moved/removed after
-    sync yields different text -> hash mismatch, even though the on-disk map
-    file was not regenerated.
+    The lock's ``expected_hash`` (present/None) declares whether the map
+    *should* exist; ``build_knowledge_map`` reflects whether the map *can*
+    currently be generated. The four combinations are:
+
+    - lock expects absent + currently generatable  -> stale (doc appeared)
+    - lock expects present + currently not generatable -> stale (docs removed)
+    - lock expects present + currently generatable -> compare rebuilt hash and
+      the on-disk file hash against the lock record
+    - lock expects absent + currently not generatable -> healthy
+
+    check is read-only. The on-disk file hash is compared too (P1-1) so a
+    tampered map file is flagged even when the rebuilt text matches.
     """
     rebuilt = build_knowledge_map(repo_root)
-    if rebuilt is None:
+    map_path = repo_root / map_rel
+    lock_expects_map = expected_hash is not None
+    currently_generatable = rebuilt is not None
+
+    if not lock_expects_map and currently_generatable:
+        # Docs appeared after a sync that recorded no map; the lock must be
+        # refreshed to pick up the new map.
+        issues.append("Knowledge map now derivable but not synced — run sync again")
+        return
+    if lock_expects_map and not currently_generatable:
         # Docs were removed after sync; the map is no longer derivable.
         issues.append("Knowledge map no longer derivable")
         return
-    map_path = repo_root / map_rel
+    if not lock_expects_map and not currently_generatable:
+        return
+    # lock_expects_map and currently_generatable: compare hashes.
     if not map_path.exists():
         issues.append(f"Missing knowledge map: {map_rel}")
+    elif hash_string(map_path.read_text(encoding="utf-8")) != expected_hash:
+        # Read as text so universal newline translation makes a freshly
+        # written file (platform line endings) hash like the canonical text.
+        # A file whose content was edited/tampered still yields a mismatch.
+        issues.append("Knowledge map file hash mismatch — file was modified")
     if hash_string(rebuilt) != expected_hash:
         issues.append("Knowledge map hash mismatch — run sync again")
+
+
+def preflight_knowledge_map(repo_root: Path, map_path: Path) -> Optional[str]:
+    """Phase-1 probe for the knowledge map write/delete before any write.
+
+    Computes the rebuilt map text (read-only) and probes writability of the
+    write target or the stale map to be deleted, failing closed with ValueError
+    before any other artifact is written. Returns the rebuilt map text (None
+    when the map is absent) for use in Phase 2.
+    """
+    text = build_knowledge_map(repo_root)
+    if text is not None or map_path.exists():
+        ensure_writable(map_path)
+    return text
+
+
+def apply_knowledge_map(map_path: Path, map_text: Optional[str]) -> bool:
+    """Phase-2 write or delete of the knowledge map using Phase-1's
+    ``map_text``. Returns True when a stale map was deleted."""
+    if map_text is not None:
+        map_path.parent.mkdir(parents=True, exist_ok=True)
+        map_path.write_text(map_text, encoding="utf-8")
+        return False
+    if map_path.exists():
+        map_path.unlink()
+        return True
+    return False
+
+
+HARNESS_LOCK_FILES = {
+    "cursor": "cursor-lock.json",
+    "codex": "codex-lock.json",
+    "codebuddy": "codebuddy-lock.json",
+}
+
+
+def other_harness_declares_map(repo_root: Path, harness: str) -> bool:
+    """Whether any OTHER harness's lock still declares a knowledge map.
+
+    Used by clean_sync: the current harness's own lock is about to be deleted,
+    so the shared map must be kept whenever any remaining harness still owns
+    it. A lock that fails to parse is conservatively ignored (treated as not
+    declaring a map).
+    """
+    for name, lock_file in HARNESS_LOCK_FILES.items():
+        if name == harness:
+            continue
+        lock_path = repo_root / ".illuminate" / lock_file
+        if lock_path.exists():
+            try:
+                lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if lock.get("knowledge_map_hash"):
+                return True
+    return False
 
 
 def ensure_writable(path: Path) -> None:
