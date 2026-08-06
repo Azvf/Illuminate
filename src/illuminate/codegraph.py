@@ -38,7 +38,11 @@ def check_codegraph(repo_root: Path, timeout: float = 10.0) -> Dict[str, object]
     }
 
     if shutil.which("codegraph") is None:
-        issues.append("CodeGraph CLI not found on PATH — run `codegraph install` first")
+        issues.append(
+            "CodeGraph CLI not found on PATH. Install CodeGraph first "
+            "(e.g. `npx @colbymchenry/codegraph` or the platform install "
+            "script), then run `codegraph install` to configure supported agents"
+        )
         return report
     report["cli_available"] = True
 

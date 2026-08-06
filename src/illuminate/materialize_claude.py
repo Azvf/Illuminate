@@ -89,18 +89,15 @@ def _generate_claude_settings(mount_plan, contracts):
         "Bash(curl *)",
         "Bash(wget *)",
     ]
-    # CodeGraph MCP tools are the default public set; allowed individually
-    # rather than via `mcp__codegraph__*` wildcard to honor least privilege.
+    # CodeGraph exposes only `codegraph_explore` by default; the narrower
+    # tools (node/search/callers/callees/impact/files/status) only appear
+    # after the user enables them via CODEGRAPH_MCP_TOOLS.
     allow = [
         "Bash(git diff:*)",
         "Bash(git status:*)",
         "Bash(git log:*)",
         "Bash(illuminate evidence audit:*)",
-        "mcp__codegraph__codegraph_context",
         "mcp__codegraph__codegraph_explore",
-        "mcp__codegraph__codegraph_trace",
-        "mcp__codegraph__codegraph_callers",
-        "mcp__codegraph__codegraph_status",
     ]
     for contract in contracts:
         for perm in contract.get("permissions", {}).get("execute", []):
