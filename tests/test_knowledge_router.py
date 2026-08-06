@@ -222,6 +222,39 @@ class TestKnowledgeRouter(unittest.TestCase):
         self.assertIsNotNone(text)
         self.assertIn("Related modules: hot-update.md, other.md", text)
 
+    def test_journey_link_title_and_query_do_not_pollute_module_name(self):
+        # A markdown title suffix and a query string must not leak into the
+        # module link name; only the clean module file is indexed.
+        repo = self._make_repo()
+        _write(
+            repo / "docs" / "40-journeys" / "bg.md",
+            "# Background\n\n"
+            "Title: [hot-update](docs/30-modules/hot-update.md \"Hot Update\")\n"
+            "Query: [other](docs/30-modules/other.md?raw=1)\n",
+        )
+        text = build_knowledge_map(repo)
+        self.assertIsNotNone(text)
+        # The clean module file names are indexed, without title/query suffixes.
+        self.assertIn("Related modules: hot-update.md, other.md", text)
+        self.assertNotIn("Hot Update.md", text)
+        self.assertNotIn("other.md?raw=1", text)
+        self.assertNotIn("other.md?raw", text)
+
+    def test_journey_bare_dir_anchor_link_emits_no_ghost_module(self):
+        # A link pointing only at the 30-modules root (with a #section) resolves
+        # to the modules root itself; it must not produce a ghost "." module.
+        repo = self._make_repo()
+        _write(
+            repo / "docs" / "40-journeys" / "bg.md",
+            "# Background\n\n"
+            "Bare: [modules](docs/30-modules/#sec)\n"
+            "Real: [hot-update](../30-modules/hot-update.md)\n",
+        )
+        text = build_knowledge_map(repo)
+        self.assertIsNotNone(text)
+        self.assertIn("Related modules: hot-update.md", text)
+        self.assertNotRegex(text, r"Related modules: \.")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -133,13 +133,15 @@ def _journey_module_links(
             raw = m.group(1).strip()
             if not raw or raw.startswith("#"):
                 continue
-            raw = raw.split("#", 1)[0].strip()
-            if not raw:
-                continue
+            # Strip optional markdown title: [a](path "Title") / [a](path 'Title').
+            raw = re.sub(r'\s+["\'][^"\']*["\']$', "", raw).strip()
             parsed = urlsplit(raw)
             if parsed.scheme or parsed.netloc:
                 continue
-            normalized = raw.replace("\\", "/")
+            # Use the net path (query/fragment already split out by urlsplit).
+            normalized = parsed.path.replace("\\", "/").strip()
+            if not normalized:
+                continue
             if normalized.startswith("/"):
                 candidate = docs_dir / normalized.lstrip("/")
             elif normalized.startswith("docs/"):
@@ -149,6 +151,10 @@ def _journey_module_links(
             try:
                 rel = candidate.resolve().relative_to(modules_root)
             except ValueError:
+                continue
+            # A bare directory link (e.g. docs/30-modules/#sec) resolves to the
+            # modules root itself; skip it instead of emitting a ghost name.
+            if rel == Path("."):
                 continue
             links.add(rel.as_posix())
     return sorted(links)
@@ -314,41 +320,53 @@ def route_read_order(request: str, knowledge_state: Dict[str, object]) -> List[s
     ``docs``, ``source``.
 
     Policy:
-      - no map -> docs/source, never retry the missing map;
-      - map first, then:
-          * status/evidence/verification -> module正文 then Metadata;
+      - map first (when present), then:
           * cross-module -> matching Journey, then its linked Modules;
+          * status/evidence/verification -> module正文 then Metadata;
+          * API / lifecycle -> matching Component;
           * single-module -> matching Module;
-          * API / lifecycle -> matching Component.
+      - matched knowledge routes without a map (no "map" step);
+      - no matched knowledge -> docs/source, never retry the missing map.
     """
     req = request.lower()
 
-    if not knowledge_state.get("has_map"):
-        return ["docs", "source"]
+    steps: List[str] = ["map"] if knowledge_state.get("has_map") else []
+    module_ids = {d.get("id") for d in knowledge_state.get("modules") or []}
 
-    steps: List[str] = ["map"]
-
-    if _VERIFY_RE.search(request):
-        steps.append("module")
-        steps.append("metadata")
-        return steps
-
+    # Cross-module behavior first (policy rule 3): matching Journey, then its
+    # linked Modules that actually exist in the index.
     for journey in knowledge_state.get("journeys") or []:
         if _matches(req, journey.get("keywords") or []) or _matches(
             req, [str(journey.get("title", ""))]
         ):
             steps.append("journey")
-            if journey.get("modules"):
+            if journey.get("modules") and any(
+                mid in module_ids for mid in journey["modules"]
+            ):
                 steps.append("module")
             return steps
+
+    # Status/evidence/verification -> module body then Metadata. Checked after
+    # Journey so a cross-module request with verify wording still reads the
+    # Journey first (policy rule 3).
+    if _VERIFY_RE.search(req):
+        steps.append("module")
+        steps.append("metadata")
+        return steps
+
+    # API / lifecycle -> Component (policy rule 2). Checked before Module so a
+    # specific component/lifecycle request is not shadowed by a module keyword.
+    if _first_match_id(req, knowledge_state.get("components") or [], "id"):
+        steps.append("component")
+        return steps
 
     if _first_match_id(req, knowledge_state.get("modules") or [], "id"):
         steps.append("module")
         return steps
 
-    if _first_match_id(req, knowledge_state.get("components") or [], "id"):
-        steps.append("component")
-        return steps
-
+    # No matched knowledge. Even without a map, matched knowledge above would
+    # have returned; only here do we fall back to scanning docs/source.
+    if not knowledge_state.get("has_map"):
+        return ["docs", "source"]
     steps.extend(["docs", "source"])
     return steps

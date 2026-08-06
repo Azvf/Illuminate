@@ -36,10 +36,32 @@
         }
       ],
       "modules": [
-        {"id": "bg-download", "keywords": ["后台下载", "下载"]}
+        {"id": "bg-download", "keywords": ["后台下载", "下载", "生命周期"]}
       ],
       "components": [
         {"id": "BgDownloadService", "keywords": ["BgDownloadService", "生命周期"]}
+      ]
+    }
+  },
+  {
+    "id": "component-beats-module-keyword",
+    "request": "BgDownloadService 的启动流程",
+    "expected_read_sequence": ["map", "component"],
+    "constraints": ["no_full_repo_scan_first"],
+    "knowledge_state": {
+      "has_map": true,
+      "journeys": [
+        {
+          "title": "后台下载完整链路",
+          "keywords": ["后台下载"],
+          "modules": ["bg-download"]
+        }
+      ],
+      "modules": [
+        {"id": "bg-download", "keywords": ["bg-download", "下载", "启动流程"]}
+      ],
+      "components": [
+        {"id": "BgDownloadService", "keywords": ["BgDownloadService", "启动流程"]}
       ]
     }
   },
@@ -64,6 +86,44 @@
     }
   },
   {
+    "id": "verify-uppercase-insensitive",
+    "request": "Is this Conclusion VERIFIED?",
+    "expected_read_sequence": ["map", "module", "metadata"],
+    "constraints": [],
+    "knowledge_state": {
+      "has_map": true,
+      "journeys": [
+        {
+          "title": "后台下载完整链路",
+          "keywords": ["后台下载"],
+          "modules": ["bg-download"]
+        }
+      ],
+      "modules": [
+        {"id": "bg-download", "keywords": ["后台下载", "下载"]}
+      ],
+      "components": []
+    }
+  },
+  {
+    "id": "journey-stale-module-link",
+    "request": "后台下载完整链路",
+    "expected_read_sequence": ["map", "journey"],
+    "constraints": ["no_full_repo_scan_first"],
+    "knowledge_state": {
+      "has_map": true,
+      "journeys": [
+        {
+          "title": "后台下载完整链路",
+          "keywords": ["后台下载", "完整链路"],
+          "modules": ["ghost-module"]
+        }
+      ],
+      "modules": [],
+      "components": []
+    }
+  },
+  {
     "id": "no-knowledge-map",
     "request": "项目里怎么没有知识地图？直接看代码",
     "expected_read_sequence": ["docs", "source"],
@@ -72,6 +132,20 @@
       "has_map": false,
       "journeys": [],
       "modules": [],
+      "components": []
+    }
+  },
+  {
+    "id": "no-map-with-knowledge-match",
+    "request": "后台下载模块实现细节",
+    "expected_read_sequence": ["module"],
+    "constraints": ["no_repeat_missing"],
+    "knowledge_state": {
+      "has_map": false,
+      "journeys": [],
+      "modules": [
+        {"id": "bg-download", "keywords": ["后台下载", "实现细节"]}
+      ],
       "components": []
     }
   },

@@ -88,6 +88,75 @@ class TestRoutingBehavior(unittest.TestCase):
         # cases.json remains loadable JSON.
         json.loads(SKILL_CASES.read_text(encoding="utf-8"))
 
+    # ── Fix-level routing regressions (route_read_order) ──
+
+    def test_component_is_not_shadowed_by_module_keyword(self):
+        # A module keyword ("生命周期") must not shadow a specific component /
+        # lifecycle request (policy rule 2: component/API/lifecycle).
+        state = {
+            "has_map": True,
+            "journeys": [],
+            "modules": [
+                {"id": "bg-download", "keywords": ["下载", "生命周期"]}
+            ],
+            "components": [
+                {"id": "BgDownloadService", "keywords": ["BgDownloadService", "生命周期"]}
+            ],
+        }
+        self.assertEqual(
+            route_read_order("BgDownloadService 的生命周期是什么", state),
+            ["map", "component"],
+        )
+
+    def test_journey_with_stale_module_omits_module_step(self):
+        # A journey referencing a module id not present in the index must not
+        # emit a step pointing at a non-existent resource.
+        state = {
+            "has_map": True,
+            "journeys": [
+                {
+                    "title": "后台下载完整链路",
+                    "keywords": ["后台下载", "完整链路"],
+                    "modules": ["ghost-module"],
+                }
+            ],
+            "modules": [],
+            "components": [],
+        }
+        self.assertEqual(
+            route_read_order("后台下载完整链路", state),
+            ["map", "journey"],
+        )
+
+    def test_no_map_still_routes_matched_knowledge(self):
+        # Without a map, matched knowledge must still be routed (policy rules
+        # 5/6) instead of short-circuiting to a repo scan.
+        state = {
+            "has_map": False,
+            "journeys": [],
+            "modules": [
+                {"id": "bg-download", "keywords": ["后台下载", "实现细节"]}
+            ],
+            "components": [],
+        }
+        self.assertEqual(
+            route_read_order("后台下载模块实现细节", state),
+            ["module"],
+        )
+
+    def test_verify_matches_uppercase_insensitively(self):
+        # "VERIFIED"/"Evidence" in any case must trigger the verify branch.
+        state = {
+            "has_map": True,
+            "journeys": [],
+            "modules": [{"id": "bg-download", "keywords": ["下载"]}],
+            "components": [],
+        }
+        self.assertEqual(
+            route_read_order("Is this Conclusion VERIFIED?", state),
+            ["map", "module", "metadata"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
