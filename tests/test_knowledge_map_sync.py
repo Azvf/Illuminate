@@ -37,7 +37,7 @@ from illuminate.sync_codex import (
 from illuminate.sync_cursor import check_sync, clean_sync, sync_cursor
 
 REPO_ROOT = Path(__file__).parent.parent
-CORE_PACK = REPO_ROOT / "packs" / "core"
+CORE_PACK = Path(__file__).parent.parent / "src" / "illuminate" / "builtin_pack"
 
 MAP_REL = ".illuminate/knowledge-map.md"
 

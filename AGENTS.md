@@ -171,7 +171,7 @@ void HandleDeadPlayer() { ... }
 void HandleRespawningPlayer() { ... }
 ```
 
-> 完整注释决策树与 Comment Smells 分类见 `packs/core/references/code-clarity.md`。
+> 完整注释决策树与 Comment Smells 分类见 `src/illuminate/builtin_pack/references/code-clarity.md`。
 
 #### 完成标准
 
@@ -470,13 +470,13 @@ Evidence Providers 覆盖 Layer 1 和 Layer 2。Layer 3 仍由 LLM 负责，但�
 illuminate evidence audit --pretty --repo .
 ```
 
-详见 `packs/core/references/evidence-layer.md`。
+详见 `src/illuminate/builtin_pack/references/evidence-layer.md`。
 
 ---
 
 ## Skills
 
-Skill 源文件位于 `packs/core/skills/`，每个 skill 包含 `SKILL.md`（模型读取）和 `contract.json`（机器可读契约）。物化器将 skill 复制到 session 挂载目录的 `.claude/skills/` 下供 Claude Code 自动发现。
+Skill 源文件位于 `src/illuminate/builtin_pack/skills/`，每个 skill 包含 `SKILL.md`（模型读取）和 `contract.json`（机器可读契约）。物化器将 skill 复制到 session 挂载目录的 `.claude/skills/` 下供 Claude Code 自动发现。
 
 以下能力按需加载，根据任务类型触发：
 
@@ -517,7 +517,7 @@ skill 之间通过 hand-off 协作，关系在每个 skill 自身定义，**不�
 
 ## Rules
 
-- 先用对应 skill 判断命中的 `packs/core/references/` 相关文档，再编码、评审或结案。
+- 先用对应 skill 判断命中的 `src/illuminate/builtin_pack/references/` 相关文档，再编码、评审或结案。
 - 知识边界：`policies/`（始终生效的原则）、`skills/`（按任务激活的程序性流程）、`references/`（按需读取的知识）、`evidence/`（确定性执行工具配置）。不在 policies 和 references 两边重复维护同一套语义。
 - 如果代码现实与 guideline 不一致，先指出不一致，再更新 guideline 或代码；不要继续沿用过期说法。
 - 修改文件时避免一次性大批量 `edit`；优先按单文件或少量相关文件分批提交补丁。

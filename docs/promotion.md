@@ -27,12 +27,12 @@ illuminate knowledge review --repo /path/to/project --id <candidate-id> --review
 illuminate knowledge review --repo /path/to/project --id <candidate-id> --reviewer alice --content generalized.md
 
 # 3. 晋升进知识包（受 reviewed_sha256 守护：评审后改过的内容会被拒绝；先 --dry-run 预览计划）
-illuminate knowledge promote --repo /path/to/project --id <candidate-id> --pack packs/core --dry-run
-illuminate knowledge promote --repo /path/to/project --id <candidate-id> --pack packs/core
+illuminate knowledge promote --repo /path/to/project --id <candidate-id> --pack src/illuminate/builtin_pack --dry-run
+illuminate knowledge promote --repo /path/to/project --id <candidate-id> --pack src/illuminate/builtin_pack
 
 # 4. 拒绝候选，或把已晋升的标记为 superseded（并从 pack 移除产物）
 illuminate knowledge reject --repo /path/to/project --id <candidate-id>
-illuminate knowledge reject --repo /path/to/project --id <candidate-id> --superseded --pack packs/core
+illuminate knowledge reject --repo /path/to/project --id <candidate-id> --superseded --pack src/illuminate/builtin_pack
 ```
 
 ## reviewed_sha256 守护

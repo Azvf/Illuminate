@@ -24,3 +24,30 @@ jobs:
 
       - name: Run tests
         run: python -m pytest tests/ -q
+
+  wheel-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wheel
+        run: |
+          pip install build
+          python -m build
+
+      - name: Install wheel into a fresh venv
+        run: |
+          python -m venv /tmp/smoke-venv
+          /tmp/smoke-venv/bin/pip install dist/*.whl
+
+      - name: Quick Start in a pack-less target project
+        run: |
+          mkdir -p /tmp/target && cd /tmp/target
+          /tmp/smoke-venv/bin/illuminate sync cursor
+          /tmp/smoke-venv/bin/illuminate sync check
+          /tmp/smoke-venv/bin/illuminate run --dry-run

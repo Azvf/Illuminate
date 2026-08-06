@@ -2,7 +2,7 @@
 
 `sync` 把知识包同步进目标 AI 编码助手，每个 harness 有独立的产物清单与 lock 文件。
 
-所有 `sync` 命令的 `--repo` 默认当前目录、`--pack` 默认 `packs/core`，可省略。
+所有 `sync` 命令的 `--repo` 默认当前目录、`--pack` 默认内置 Core Pack，可省略。
 
 ## Codex
 

@@ -19,7 +19,7 @@ from illuminate.sync_codex import (
 )
 
 REPO_ROOT = Path(__file__).parent.parent
-CORE_PACK = REPO_ROOT / "packs" / "core"
+CORE_PACK = Path(__file__).parent.parent / "src" / "illuminate" / "builtin_pack"
 
 
 class TestSyncCodex(unittest.TestCase):

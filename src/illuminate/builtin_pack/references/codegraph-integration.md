@@ -27,6 +27,10 @@ CodeGraph 不是 Harness Adapter：它不消费 Pack，只给 Harness 提供源�
 
 ## 安装（机器级，只执行一次）
 
+首次安装入口（未安装 CLI 时）：`npx @colbymchenry/codegraph`，或使用平台
+安装脚本（Windows: `install.ps1`；macOS/Linux: `install.sh`）。`codegraph
+install` 是安装完成后的 Agent 配置子命令，不是从零安装命令。
+
 Windows PowerShell：
 
 ```powershell
@@ -81,13 +85,13 @@ Illuminate 不会：
 符号定位、调用链、影响范围优先用 CodeGraph 缩小范围，最终行为结论仍需代码、配置、
 日志或测试验证。
 
-CodeGraph 默认 MCP 工具（claude-settings 按最小权限逐个允许）：
+CodeGraph 默认只公开 `codegraph_explore`。
 
-- `codegraph_context` — 首要入口，按任务描述返回入口点与相关上下文
-- `codegraph_explore` — 返回相关源码与调用路径
-- `codegraph_trace` — 调用链追踪
-- `codegraph_callers` — 查找调用者
-- `codegraph_status` — 索引状态与 pending sync
+其他窄工具（`codegraph_node`、`codegraph_search`、`codegraph_callers`、
+`codegraph_callees`、`codegraph_impact`、`codegraph_files`、
+`codegraph_status`）只有在用户通过 `CODEGRAPH_MCP_TOOLS` 显式启用后
+才会出现在 MCP 工具列表中。claude-settings 只放行默认公开的
+`codegraph_explore`（最小权限，非 wildcard）。
 
 ## CodeBuddy（无 MCP）
 
@@ -96,5 +100,7 @@ CodeGraph MCP 不可用但 `.codegraph/` 存在时：
 - `codegraph explore "<question>"`
 - `codegraph impact <symbol>`
 - `codegraph status`
+
+官方 CLI 还提供 `node`、`callers`、`callees` 命令。
 
 不要把"没有 MCP"当成"没有 CodeGraph 能力"。

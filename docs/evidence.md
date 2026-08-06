@@ -23,7 +23,7 @@ Evidence Providers 覆盖 Layer 1 和 Layer 2。Layer 3 仍由 LLM 负责，但�
 ```bash
 illuminate evidence audit --pretty
 # 可指定知识包，绑定报告的 pack 身份
-illuminate evidence audit --pack packs/core --output report.json --pretty
+illuminate evidence audit --pack src/illuminate/builtin_pack --output report.json --pretty
 ```
 
 `--repo` 默认当前目录，可省略；`--pack` 可绑定报告的 pack 身份。

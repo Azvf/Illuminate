@@ -2,7 +2,8 @@
 
 Covers:
   - `--repo` defaults to "." for commands that now omit it.
-  - `run --pack` defaults to "packs/core" (while `mount create --pack` stays required).
+  - `run --pack` defaults to the built-in Core Pack (while `mount create --pack`
+    stays required).
   - `sync check` without `--harness` auto-detects synced harnesses from
     <repo>/.illuminate/ lock files.
 """
@@ -23,7 +24,7 @@ from illuminate.sync_codex import sync_codex
 from illuminate.sync_cursor import sync_cursor
 
 REPO_ROOT = Path(__file__).parent.parent
-CORE_PACK = REPO_ROOT / "packs" / "core"
+CORE_PACK = Path(__file__).parent.parent / "src" / "illuminate" / "builtin_pack"
 
 
 class TestCliDefaults(unittest.TestCase):
@@ -35,7 +36,7 @@ class TestCliDefaults(unittest.TestCase):
 
     def test_repo_default_is_dot(self):
         cases = [
-            ["mount", "create", "--pack", "packs/core"],
+            ["mount", "create", "--pack", "x"],
             ["run"],
             ["sync", "codex"],
             ["sync", "codebuddy"],
@@ -49,7 +50,7 @@ class TestCliDefaults(unittest.TestCase):
             ["knowledge", "push"],
             ["knowledge", "candidate", "--source", "x", "--target", "policy"],
             ["knowledge", "review", "--id", "x"],
-            ["knowledge", "promote", "--id", "x", "--pack", "packs/core"],
+            ["knowledge", "promote", "--id", "x", "--pack", "x"],
             ["knowledge", "reject", "--id", "x"],
             ["repo", "inspect"],
             ["evidence", "audit"],
@@ -64,7 +65,7 @@ class TestCliDefaults(unittest.TestCase):
     # --pack defaults
 
     def test_run_pack_default(self):
-        self.assertEqual(self._parse(["run"]).pack, "packs/core")
+        self.assertIsNone(self._parse(["run"]).pack)
 
     def test_mount_create_pack_still_required(self):
         with self.assertRaises(SystemExit):
@@ -72,7 +73,7 @@ class TestCliDefaults(unittest.TestCase):
 
     def test_mount_create_repo_still_resolvable(self):
         # --repo is optional now; supplying it explicitly must be accepted.
-        args = self._parse(["mount", "create", "--pack", "packs/core", "--repo", "/some/repo"])
+        args = self._parse(["mount", "create", "--pack", "x", "--repo", "/some/repo"])
         self.assertEqual(args.repo, "/some/repo")
 
     # sync check --harness default None

@@ -39,7 +39,7 @@
       "docs/README-HUMAN.md",
       "docs/human-docs.json",
       "docs/Development/**",
-      "packs/core/skills/**"
+      "src/illuminate/builtin_pack/skills/**"
     ],
     "execute": [
       "grep",

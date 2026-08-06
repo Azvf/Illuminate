@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'packs' / 'core' / 'skills' / 'tidy-doc' / 'scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src' / 'illuminate' / 'builtin_pack' / 'skills' / 'tidy-doc' / 'scripts'))
 
 from check_doc_quality import (
     META_NARRATIVE_PATTERNS,
@@ -41,7 +41,7 @@ def run_scan(md_content: str, docs_dir: Path) -> tuple[int, str]:
     """把 md_content 写入临时 docs 目录并运行主程序，返回 (exit_code, stdout)。"""
     import subprocess
 
-    script = Path(__file__).resolve().parent.parent / 'packs' / 'core' / 'skills' / 'tidy-doc' / 'scripts' / 'check_doc_quality.py'
+    script = Path(__file__).resolve().parent.parent / 'src' / 'illuminate' / 'builtin_pack' / 'skills' / 'tidy-doc' / 'scripts' / 'check_doc_quality.py'
 
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp) / 'docs'

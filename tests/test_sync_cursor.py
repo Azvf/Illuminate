@@ -25,7 +25,7 @@ from illuminate.sync_cursor import (
 )
 
 REPO_ROOT = Path(__file__).parent.parent
-CORE_PACK = REPO_ROOT / "packs" / "core"
+CORE_PACK = Path(__file__).parent.parent / "src" / "illuminate" / "builtin_pack"
 
 _RULES_REL = ".cursor/rules/illuminate/core.mdc"
 

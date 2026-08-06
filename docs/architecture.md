@@ -12,7 +12,7 @@ Illuminate 是一个 Git 版本化的**工程知识包（Knowledge Pack）编译
 
 ## Pack 结构
 
-知识包目录（如 `packs/core/`）由 `pack.json` 声明，包含四类知识边界：
+知识包目录（如内置的 `src/illuminate/builtin_pack/`）由 `pack.json` 声明，包含四类知识边界：
 
 | 边界 | 用途 | 编译产物 |
 |------|------|----------|
@@ -48,7 +48,7 @@ Illuminate 是一个 Git 版本化的**工程知识包（Knowledge Pack）编译
 
 ```bash
 # 1. 物化会话（只生成，不启动）
-illuminate mount create --pack packs/core --skill illuminate.layer-debug
+illuminate mount create --pack src/illuminate/builtin_pack --skill illuminate.layer-debug
 
 # 2. 校验会话完整性（哈希 + 文件检查）
 illuminate mount verify ~/.illuminate/sessions/<session-id>/
@@ -63,7 +63,7 @@ illuminate run --skill illuminate.layer-debug --skill illuminate.grilling
 illuminate mount remove <session-dir-or-id>
 ```
 
-`run` 无参数时 `--pack` 默认 `packs/core`、`--repo` 默认 `.`。如需指定仓库，等价写法为 `--repo <path>`。
+`run` 无参数时 `--pack` 默认内置 Core Pack、`--repo` 默认 `.`。如需指定仓库，等价写法为 `--repo <path>`。
 
 生成的会话目录结构：
 

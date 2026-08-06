@@ -16,5 +16,6 @@ illuminate = "illuminate.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
+"illuminate" = ["builtin_pack/**/*", "builtin_pack/*.json"]
 "illuminate.evidence" = ["*.json"]
 "illuminate.schemas" = ["*.json"]

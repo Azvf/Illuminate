@@ -29,7 +29,7 @@ from illuminate.sync_cursor import sync_cursor
 from illuminate.sync_shared import PROJECT_KNOWLEDGE_BLOCK
 
 REPO_ROOT = Path(__file__).parent.parent
-CORE_PACK = REPO_ROOT / "packs" / "core"
+CORE_PACK = Path(__file__).parent.parent / "src" / "illuminate" / "builtin_pack"
 
 
 def _exposed_via_mount(skill_filter):

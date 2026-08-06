@@ -122,7 +122,7 @@ def build_command_catalog() -> Dict[str, CommandSpec]:
                 "```\n"
                 "illuminate knowledge candidate --repo . --source 30-modules/demo.md --target reference\n"
                 "illuminate knowledge review --repo . --id <id>\n"
-                "illuminate knowledge promote --repo . --id <id> --pack packs/core\n"
+                "illuminate knowledge promote --repo . --id <id> --pack src/illuminate/builtin_pack\n"
                 "```\n\n"
                 "用户补充要求（可选）：在此填写要发起的来源路径、目标类型或备注。"
             ),

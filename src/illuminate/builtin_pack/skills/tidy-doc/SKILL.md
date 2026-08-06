@@ -152,7 +152,7 @@ rg -n '\\n|\\\\n|\\r\\n|\\t' docs --glob '*.md'
 python scripts/check_doc_quality.py --docs-dir docs
 ```
 
-不得假设 Skill 位于 `packs/core/skills/`；在 Codex / CodeBuddy / Claude 等目标项目中，Skill 实际路径分别为 `.agents/skills/` / `.codebuddy/skills/` / `.claude/skills/`。以 `SKILL.md` 所在目录为基准定位 `scripts/check_doc_quality.py`。
+不得假设 Skill 位于某个固定的仓库路径；在 Codex / CodeBuddy / Claude 等目标项目中，Skill 实际路径分别为 `.agents/skills/` / `.codebuddy/skills/` / `.claude/skills/`。以 `SKILL.md` 所在目录为基准定位 `scripts/check_doc_quality.py`。
 
 #### 检查 Mermaid
 

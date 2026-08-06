@@ -7,7 +7,7 @@
 每次改动知识包后，先校验再使用：
 
 ```bash
-illuminate pack validate packs/core
+illuminate pack validate src/illuminate/builtin_pack
 ```
 
 校验 `pack.json` 声明的 policies / skills / references / evidence 边界是否合法、文件是否存在。校验通过时输出 Pack id / version 与技能数；失败时列出错误清单并返回非零退出码。
@@ -17,7 +17,7 @@ illuminate pack validate packs/core
 为期望旧版 `.claude/skills/` 布局的工具生成兼容目录：
 
 ```bash
-illuminate compat generate          # 生成兼容目录（默认 pack：packs/core）
+illuminate compat generate          # 生成兼容目录（默认 pack：内置 Core Pack）
 illuminate compat check             # 校验与规范源一致（文件 + SHA-256）
 ```
 
@@ -31,8 +31,8 @@ illuminate compat check             # 校验与规范源一致（文件 + SHA-25
 ## 项目目录结构
 
 ```
-packs/core/          # 核心知识包（policies、skills、references、evidence 配置）
-src/illuminate/      # CLI 实现（validate、resolve、materialize、evidence、sync、knowledge 等）
+src/illuminate/builtin_pack/  # 内置 Core Pack（policies、skills、references、evidence 配置，随包分发）
+src/illuminate/               # CLI 实现（validate、resolve、materialize、evidence、sync、knowledge 等）
 src/illuminate/schemas/   # pack / contract / mount-plan / mount-lock 的 JSON Schema（随包分发）
 tests/               # 单元测试
 evals/routing/       # 路由评估用例
@@ -42,6 +42,6 @@ evals/routing/       # 路由评估用例
 
 ```bash
 pip install -e .             # 安装（零运行时依赖，Python >= 3.9）
-illuminate pack validate packs/core
+illuminate pack validate src/illuminate/builtin_pack
 python -m pytest tests/ -q
 ```

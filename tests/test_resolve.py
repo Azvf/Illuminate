@@ -17,7 +17,7 @@ from illuminate.resolve import (
 from illuminate.manifest import load_pack_manifest, load_skill_contracts
 
 REPO_ROOT = Path(__file__).parent.parent
-CORE_PACK = REPO_ROOT / "packs" / "core"
+CORE_PACK = Path(__file__).parent.parent / "src" / "illuminate" / "builtin_pack"
 
 
 class TestResolve(unittest.TestCase):

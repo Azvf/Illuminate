@@ -1,6 +1,8 @@
 """Illuminate CLI — main entry point.
 
 Commands (--repo defaults to ".", the current directory):
+    --pack is optional for run/compat/sync; when omitted the built-in Core
+    Pack (illuminate.builtin_pack) is used instead of an explicit path.
     illuminate pack validate <pack_dir>
     illuminate repo inspect [--repo <path>]
     illuminate mount create --pack <dir> [--repo <path>] [--skill <id>...]
@@ -67,6 +69,21 @@ from .knowledge_lint import format_knowledge_lint_errors, lint_knowledge
 _SESSION_BASE = Path.home() / ".illuminate" / "sessions"
 
 
+def _builtin_pack_dir() -> Path:
+    """Locate the Core Pack shipped inside the package.
+
+    ``__file__`` always points at the real package directory (editable src
+    layout and wheel install alike), so the built-in pack is found without
+    depending on the current working directory or the repository layout.
+    """
+    return Path(__file__).resolve().parent / "builtin_pack"
+
+
+def resolve_pack_dir(pack_arg) -> Path:
+    """Resolve --pack to a pack directory, defaulting to the built-in pack."""
+    return _builtin_pack_dir() if not pack_arg else Path(pack_arg).expanduser().resolve()
+
+
 # ---------------------------------------------------------------------------
 # CLI argument parsing
 # ---------------------------------------------------------------------------
@@ -109,7 +126,7 @@ def _build_parser():
 
     # run
     p = sub.add_parser("run", help="Materialize and launch a Claude Code session")
-    p.add_argument("--pack", default="packs/core", help="Path to the pack directory")
+    p.add_argument("--pack", default=None, help="Path to the pack directory (default: built-in Core Pack)")
     p.add_argument("--repo", default=".", help="Target repository path")
     p.add_argument("--skill", action="append", default=None,
                    help="Skill ID to expose (repeatable)")
@@ -131,16 +148,16 @@ def _build_parser():
     p = sub.add_parser("compat", help="Legacy compatibility operations")
     ps = p.add_subparsers(dest="compat_command")
     cg = ps.add_parser("generate", help="Generate legacy compatibility dirs from canonical sources")
-    cg.add_argument("--pack", default="packs/core", help="Pack directory path")
+    cg.add_argument("--pack", default=None, help="Pack directory path")
     cc = ps.add_parser("check", help="Check legacy compatibility dirs exist and are in sync")
-    cc.add_argument("--pack", default="packs/core", help="Pack directory path")
+    cc.add_argument("--pack", default=None, help="Pack directory path")
 
     # sync codex / codebuddy / check / clean
     p = sub.add_parser("sync", help="Synchronize Pack into target repository")
     ps = p.add_subparsers(dest="sync_command")
 
     sc = ps.add_parser("codex", help="Synchronize for Codex App (AGENTS.md + .agents/skills + openai.yaml)")
-    sc.add_argument("--pack", default="packs/core", help="Pack directory path")
+    sc.add_argument("--pack", default=None, help="Pack directory path")
     sc.add_argument("--repo", default=".", help="Target repository path")
     sc.add_argument("--skill", action="append", default=None,
                     help="Skill ID to sync (repeatable; default: all non-alias)")
@@ -148,7 +165,7 @@ def _build_parser():
                     help="Overwrite an unmanaged knowledge map that no Illuminate lock owns")
 
     scb = ps.add_parser("codebuddy", help="Synchronize for CodeBuddy (.codebuddy/rules/illuminate/ + skills + commands)")
-    scb.add_argument("--pack", default="packs/core", help="Pack directory path")
+    scb.add_argument("--pack", default=None, help="Pack directory path")
     scb.add_argument("--repo", default=".", help="Target repository path")
     scb.add_argument("--skill", action="append", default=None,
                      help="Skill ID to sync (repeatable; default: all non-alias)")
@@ -156,7 +173,7 @@ def _build_parser():
                      help="Overwrite an unmanaged knowledge map that no Illuminate lock owns")
 
     scu = ps.add_parser("cursor", help="Synchronize for Cursor (.cursor/rules + .cursor/skills + commands)")
-    scu.add_argument("--pack", default="packs/core", help="Pack directory path")
+    scu.add_argument("--pack", default=None, help="Pack directory path")
     scu.add_argument("--repo", default=".", help="Target repository path")
     scu.add_argument("--skill", action="append", default=None,
                      help="Skill ID to sync (repeatable; default: all non-alias)")
@@ -167,7 +184,7 @@ def _build_parser():
                      help="Overwrite an unmanaged knowledge map that no Illuminate lock owns")
 
     sch = ps.add_parser("check", help="Verify sync integrity for Codex, CodeBuddy, or Cursor")
-    sch.add_argument("--pack", default="packs/core", help="Pack directory path")
+    sch.add_argument("--pack", default=None, help="Pack directory path")
     sch.add_argument("--repo", default=".", help="Target repository path")
     sch.add_argument("--harness", choices=["codex", "codebuddy", "cursor"], default=None,
                      help="Harness to check (auto-detected from <repo>/.illuminate locks if omitted)")
@@ -323,7 +340,7 @@ def _cmd_repo_inspect(args):
 
 
 def _cmd_mount_create(args):
-    pack_dir = Path(args.pack).resolve()
+    pack_dir = resolve_pack_dir(args.pack)
     repo = Path(args.repo).resolve()
 
     exit_code = _validate_pack_and_repo(pack_dir, repo)
@@ -418,7 +435,7 @@ def _cmd_mount_remove(args):
 
 
 def _cmd_run(args):
-    pack_dir = Path(args.pack).resolve()
+    pack_dir = resolve_pack_dir(args.pack)
     repo = Path(args.repo).resolve()
 
     exit_code = _validate_pack_and_repo(pack_dir, repo)
@@ -441,7 +458,7 @@ def _cmd_evidence_audit(args):
         return 1
     pack_dir = None
     if args.pack:
-        pack_dir = Path(args.pack).resolve()
+        pack_dir = resolve_pack_dir(args.pack)
         if not pack_dir.exists():
             print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
             return 1
@@ -468,7 +485,7 @@ def _cmd_evidence_audit(args):
 
 
 def _cmd_compat_generate(args):
-    pack_dir = Path(args.pack).resolve()
+    pack_dir = resolve_pack_dir(args.pack)
     if not pack_dir.exists():
         print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
         return 1
@@ -485,7 +502,7 @@ def _cmd_compat_generate(args):
 
 
 def _cmd_compat_check(args):
-    pack_dir = Path(args.pack).resolve()
+    pack_dir = resolve_pack_dir(args.pack)
     if not pack_dir.exists():
         print(f"Error: pack directory not found: {pack_dir}", file=sys.stderr)
         return 1
@@ -500,7 +517,7 @@ def _cmd_compat_check(args):
 
 
 def _cmd_sync_codex(args):
-    pack_dir = Path(args.pack).resolve()
+    pack_dir = resolve_pack_dir(args.pack)
     repo = Path(args.repo).resolve()
 
     if not pack_dir.exists():
@@ -527,7 +544,7 @@ def _cmd_sync_codex(args):
 
 
 def _cmd_sync_codebuddy(args):
-    pack_dir = Path(args.pack).resolve()
+    pack_dir = resolve_pack_dir(args.pack)
     repo = Path(args.repo).resolve()
 
     if not pack_dir.exists():
@@ -554,7 +571,7 @@ def _cmd_sync_codebuddy(args):
 
 
 def _cmd_sync_cursor(args):
-    pack_dir = Path(args.pack).resolve()
+    pack_dir = resolve_pack_dir(args.pack)
     repo = Path(args.repo).resolve()
 
     if not pack_dir.exists():
@@ -597,7 +614,7 @@ def _detect_synced_harnesses(repo_root):
 
 
 def _cmd_sync_check(args):
-    pack_dir = Path(args.pack).resolve()
+    pack_dir = resolve_pack_dir(args.pack)
     repo = Path(args.repo).resolve()
 
     if not pack_dir.exists():
